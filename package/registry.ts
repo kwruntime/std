@@ -4,8 +4,8 @@ import Semver from '../util/semver'
 
 import uniqid from "../util/uniqid"    
 
-import "github+/kodhework/npm-deps/dist/tar/6.0.5.js##tar"
-import tar from 'tar'
+//import "github+/kodhework/npm-deps/dist/tar/6.1.0.js##tar"
+import tar from '../compression/tar'
 
 
 import fs from '../fs/mod'
@@ -23,7 +23,7 @@ if (!global.kawix) {
 
 export class Registry {
 
-	static cache : any  = {}
+	static cache:any  = {}
 
 	options: any 
 	url: string 
