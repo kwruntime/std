@@ -33,7 +33,7 @@ export class EventIterator{
     
 
     async *[Symbol.asyncIterator](){
-        let def = null
+        let def:Deferred<void> = null
         let items = []
         let createFunc = function(event: string){
             return function(item){
@@ -64,7 +64,7 @@ export class EventIterator{
                 }
                 else{
                     def = this.#deferred =  deferred<void>()
-                    await def.promise 
+                    await def 
                 }
             }
         }catch(e){

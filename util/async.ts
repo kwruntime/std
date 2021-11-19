@@ -54,10 +54,9 @@ export class DelayedTask<T> {
 	get promise(){
 		return this.deferred.promise
 	}
-
-
 }
 
+/* Resolves after the given number of milliseconds. */
 export function sleep(timeout : number = 0) : Promise<void>{
 	return new Promise<void>(function(resolve){
 		setTimeout(resolve, timeout)
