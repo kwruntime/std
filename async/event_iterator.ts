@@ -1,4 +1,4 @@
-import {Deferred} from './deferred.ts'
+import {deferred, Deferred} from './deferred.ts'
 import {Exception} from '../util/exception.ts'
 import { AsyncEventEmitter } from './events.ts'
 
@@ -63,7 +63,7 @@ export class EventIterator{
                     }
                 }
                 else{
-                    def = this.#deferred =  new Deferred<void>()
+                    def = this.#deferred =  deferred<void>()
                     await def.promise 
                 }
             }
