@@ -27,6 +27,8 @@ export class RPAHandler{
         this.socket= socket
     }
 
+
+
     set(target: any, prop: string, value:any) {
         if(prop && prop.startsWith && prop.startsWith("rpa_")){
             target[prop] = value
@@ -86,6 +88,10 @@ export class Channel extends EventEmitter{
     constructor(id){
         super()
         this.cid = id
+    }
+
+    get server(){
+        return this.$net
     }
 
     plain(object){
