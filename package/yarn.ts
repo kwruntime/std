@@ -3,7 +3,7 @@ import fs from '../fs/mod'
 import Path from 'path'
 import Os from 'os'
 import crypto from 'crypto'
-import Semver from '../util/semver'
+import Semver from 'https://esm.sh/semver@7.3.5'
 import Child from 'child_process'
 import * as async from '../util/async'
 import {Exception} from "../util/exception"
