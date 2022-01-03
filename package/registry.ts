@@ -1,11 +1,11 @@
 // Copyright 2019 Kodhe
 
-import Semver from '../util/semver'
+import Semver from 'https://esm.sh/semver@7.3.5'
 
-import uniqid from "../util/uniqid"    
+import uniqid from "https://esm.sh/uniqid@5.4.0"    
 
 //import "github+/kodhework/npm-deps/dist/tar/6.1.0.js##tar"
-import tar from '../compression/tar'
+import tar from 'https://esm.sh/tar@6.1.11'
 
 
 import fs from '../fs/mod'
