@@ -18,12 +18,13 @@ import Zlib from 'zlib'
 export class Registry{
     static cache = {}
     static checked = {}
+    static binCache:{[key:string]: string} = {}
 
     _packagesfolder: string 
 
 
     pnpm = "https://unpkg.com/pnpm@${version}"
-    pnpmVersion = "6.24.4"
+    pnpmVersion = "latest"
 
     constructor(){}
 
@@ -35,6 +36,16 @@ export class Registry{
         }
         return packages
     }
+
+    async $defaultFolder(){
+        var home = Path.join(Os.homedir(), ".kawi")
+        var packages = Path.join(home, "packages")
+        if(!fs.existsSync(packages)){
+            await fs.promises.mkdir(packages)
+        }
+        return packages
+    }
+
 
     async $modulePath(modules: ModName[], uid?: string, force = false){
         if(!uid)
@@ -183,6 +194,83 @@ export class Registry{
     }
 
     async $pnpmBin(){
+        let url = this.pnpm.replace("${version}", this.pnpmVersion)
+        let hash = crypto.createHash("md5").update(url).digest("hex") + ".data.json"
+        let folder = await this.$createFolder()
+        let file = Path.join(folder, hash)
+        let code = Path.join(folder, hash + ".js")
+        let data = null 
+        if(fs.existsSync(file)){
+            let content = await fs.promises.readFile(file, 'utf8')
+            try{
+                data = JSON.parse(content)
+            }catch(e){}
+        }
+
+        let needcheck = false
+        if(data){
+            // check if version is fully cacheable
+            let isgood = /\d/.test(this.pnpmVersion[0]) && 
+                ( (["*>=.x^"].filter((a) => this.pnpmVersion.indexOf(a) >= 0).length == 0) )
+            
+            if(!isgood){
+                if(Date.now() - data.time > (24*3*3600000)){
+                    // revisar cada 3 días?? 
+                    needcheck = true
+                }
+            }
+        }
+
+
+        if(!data || needcheck){
+
+            let uid = parseInt(String(Date.now()/24*3*3600000)).toString() + ".json"
+			let pack = await import("https://unpkg.com/pnpm/package.json?date=" + uid)
+            let version = data && data.version
+            if(pack.version != version){
+
+                console.info("> Installing/updating pnpm version:", this.pnpmVersion)
+                let def = new async.Deferred<Buffer>()
+                let decompressor = Zlib.createGunzip()
+                decompressor.once("error", def.reject)
+                let sw = fs.createWriteStream(code)
+                sw.once("error", def.reject)
+                sw.once("finish", def.resolve)
+
+                let get = function(url: string){
+                    https.get(url, {
+                        "headers": {
+                            "Accept-Encoding": "gzip"
+                        }
+                    }, (res)=> {
+                        if(res.statusCode >= 400){
+                            return def.reject(Exception.create("Failed getting pnpm executable").putCode("DOWNLOAD_FAILED"))
+                        }
+                        if(res.headers.location){
+                            return get(new URL(res.headers.location, url).href) 
+                        }
+
+                        res.pipe(decompressor).pipe(sw)
+                    }).once("error", def.reject)
+                }
+                //get("https://unpkg.com/pnpm@" + pack.version)
+                get(this.pnpm.replace("${version}", pack.version))
+
+                await def.promise
+
+                data = {
+                    version: pack.version,
+                    time: Date.now(),
+                    main: code
+                }
+                await fs.promises.writeFile(file, JSON.stringify(data))
+            }
+            
+        }
+        return data.main
+    }
+
+    async $old_pnpmBin(){
 
         /*
         let item = await kawix.importInfo("http://esm.sh/pnpm@6.24.4")
@@ -271,8 +359,7 @@ export class Registry{
 
         var out = await this.$modulePath(modules, uid, force)
         var verif = Path.join(out, "__kwcore_verification")
-        if(await fs.existsSync(verif)){
-
+        if(fs.existsSync(verif)){
             let content = await fs.promises.readFile(verif,'utf8')
             if(content.indexOf(text+".") < 0){
                 await fs.promises.unlink(verif)
