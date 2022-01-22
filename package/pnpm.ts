@@ -326,7 +326,7 @@ export class Registry{
         let bin = await this.$pnpmBin()
         var p = Child.spawn(process.execPath, [bin, "i"], {
             env: Object.assign({}, process.env, {
-                PATH: Path.dirname(process.execPath) + Path.delimiter + process.env.PATH,
+                PATH: Path.dirname(process.execPath) + Path.delimiter + Path.join(Path.dirname(process.execPath), "..", "utils") + Path.delimiter + process.env.PATH,
                 NODE_REQUIRE: "1",
                 ELECTRON_RUN_AS_NODE: "1",
                 PNPM_EXECUTE: "1"
