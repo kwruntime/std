@@ -18,7 +18,7 @@ import Zlib from 'zlib'
 export class Registry{
     static cache = {}
     static checked = {}
-    static binCache:{[key:string]: string} = {}
+    static binCache:{[key:string]: any} = {}
 
     _packagesfolder: string 
 
@@ -194,12 +194,16 @@ export class Registry{
     }
 
     async $pnpmBin(){
+
+        let data = Registry.binCache[this.pnpmVersion]
+        if(data) return data.main 
+
         let url = this.pnpm.replace("${version}", this.pnpmVersion)
         let hash = crypto.createHash("md5").update(url).digest("hex") + ".data.json"
         let folder = await this.$createFolder()
         let file = Path.join(folder, hash)
         let code = Path.join(folder, hash + ".js")
-        let data = null 
+        
         if(fs.existsSync(file)){
             let content = await fs.promises.readFile(file, 'utf8')
             try{
@@ -230,6 +234,7 @@ export class Registry{
             if(pack.version != version){
 
                 console.info("> Installing/updating pnpm version:", this.pnpmVersion)
+
                 let def = new async.Deferred<Buffer>()
                 let decompressor = Zlib.createGunzip()
                 decompressor.once("error", def.reject)
@@ -267,6 +272,8 @@ export class Registry{
             }
             
         }
+
+        Registry.binCache[this.pnpmVersion] = data 
         return data.main
     }
 
