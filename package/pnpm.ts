@@ -355,6 +355,24 @@ export class Registry{
     }
 
 
+    async secureRequire(mod: ModuleInfo){
+
+        let folder = Path.join(mod.folder,"..","..")
+        try{
+            return require(mod.main)
+        }catch(e){
+            // something bad at installing
+            if(e.message.indexOf("Could not locate the bindings") >= 0){
+                await this.$pnpmExecute(folder)
+                return require(mod.main)
+            }
+            else{
+                throw e
+            }
+        }
+
+    }
+
     async resolveMany(modules: ModName[], uid?: string, force = false): Promise<ModuleInfo[]>{
         let text = modules.map((a)=> a.name + "@" + a.version).join(",")
         if(!uid)
