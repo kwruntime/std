@@ -128,6 +128,7 @@ function $$$createKModule(filename?: string){
 export interface BuilderOptions{
 	target?: string 
 	minify?: any
+	esbuild?: any
 	npmExternalModules?: string[] 
 	excludeNpmModules?: boolean
 }
@@ -351,23 +352,23 @@ export class Builder{
 				
 
 				if(this.#options.target == "node"){
-					await esbuild.build({
+					await esbuild.build(Object.assign({
 						entryPoints: [mfile],
 						bundle: true,
 						platform: 'node',
 						target: "node" + process.version.substring(1).split(".")[0],
 						logLevel: 'error',
 						outfile: mfile2
-					})
+					}, this.#options.esbuild || {}))
 				}
 				else{
-					await esbuild.build({
+					await esbuild.build(Object.assign({
 						entryPoints: [mfile],
 						bundle: true,
 						target: this.#options.target,
 						logLevel: 'error',
 						outfile: mfile2
-					})
+					}, this.#options.esbuild || {}))
 				}
 
 				let content = await fs.promises.readFile(mfile2, 'utf8')
