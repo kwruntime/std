@@ -5,7 +5,7 @@ import { Writable } from 'stream'
 
 import {Registry} from '../pnpm.ts'
 import * as esbuild from 'npm://esbuild@0.14.0'
-import {kawix, ModuleImportInfo} from 'gh+/kwruntime/core@59e5f11/src/kwruntime.ts'
+import {kawix, ModuleImportInfo} from 'gh+/kwruntime/core@1.1.15/src/kwruntime.ts'
 
 function $$$createKModule(filename?: string){	
 
@@ -292,16 +292,15 @@ export class Builder{
 			}
 			
 			if(externalModules.length){
-
-				let info = await kawix.importInfo("gh+/kwruntime/std@1.1.8/package/yarn.ts")
+				let info = await kawix.importInfo(kawix.packageLoader)
 				await addInfo(info)
 
 				let mcode = []
 				mcode.push("exports.kawixPreload = async function(){")
 				let code = `
 				
-				var yarn = $$KModule.require(${JSON.stringify(info.request)})
-				var reg = new yarn.Registry()
+				var loader = $$KModule.require(${JSON.stringify(info.request)})
+				var reg = new loader.Registry()
 				var modReqs = ${JSON.stringify(externalModules)}
 				var modInfos = []
 				if(modReqs.length == 1){
