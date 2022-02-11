@@ -22,7 +22,7 @@ export class Registry{
 
     _packagesfolder: string 
 
-
+    env: {[key:string]: string} = {}
     pnpm = "https://unpkg.com/pnpm@${version}"
     pnpmVersion = "latest"
 
@@ -54,7 +54,12 @@ export class Registry{
 
         let packages = await this.$createFolder()
         this._packagesfolder  = packages
-        var md5 = crypto.createHash("md5").update(uid).digest('hex') // + "-" + module.replace(/[\@\?]/g,'')
+        let md5 = crypto.createHash("md5").update(uid).digest('hex') // + "-" + module.replace(/[\@\?]/g,'')
+        if(Object.keys(this.env).length > 0){
+            let md51 = crypto.createHash("md5").update(uid).digest('hex')
+            md5 += "+" + md51
+        }
+
         var pack = Path.join(packages, md5)
         if (!fs.existsSync(pack)) {
             await fs.promises.mkdir(pack)
@@ -331,7 +336,7 @@ export class Registry{
                 NODE_ENV:"production",
                 ELECTRON_RUN_AS_NODE: "1",
                 PNPM_EXECUTE: "1"
-            }),
+            }, this.env),
             cwd: folder
         })
 

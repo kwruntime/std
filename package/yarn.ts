@@ -22,7 +22,7 @@ export class Registry{
 
     _packagesfolder: string 
 
-
+    env: {[key:string] : string} = {}
     yarn = "https://unpkg.com/yarn@${version}/lib/cli.js"
     yarnVersion = "latest"
 
@@ -43,15 +43,19 @@ export class Registry{
         if(!uid)
             uid = modules.map((a)=> a.name + "@" + (a.version||"latest")).join(",") 
 
-
         let packages = await this.$createFolder()
         this._packagesfolder  = packages
-        var md5 = crypto.createHash("md5").update(uid).digest('hex') // + "-" + module.replace(/[\@\?]/g,'')
-        var pack = Path.join(packages, md5)
+        let md5 = crypto.createHash("md5").update(uid).digest('hex') // + "-" + module.replace(/[\@\?]/g,'')
+        if(Object.keys(this.env).length > 0){
+            let md51 = crypto.createHash("md5").update(uid).digest('hex')
+            md5 += "+" + md51
+        }
+
+        let pack = Path.join(packages, md5)
         if (!fs.existsSync(pack)) {
             await fs.promises.mkdir(pack)
         }
-        var jsonPack = Path.join(pack, "package.json")
+        let jsonPack = Path.join(pack, "package.json")
         if(force || (!fs.existsSync(jsonPack))){
             let content  = {
                 name : 'test-0',
@@ -277,7 +281,7 @@ export class Registry{
                 NODE_ENV:"production",
                 ELECTRON_RUN_AS_NODE: "1",
                 YARN_EXECUTE: "1"
-            }),
+            }, this.env),
             cwd: folder
         })
 
