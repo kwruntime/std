@@ -279,7 +279,7 @@ export class Builder{
 			for(let name of npmModules){
 				let uri = new URL("npm://" + name)
 				let text = name 
-				let modname = uri.pathname.substring(2)
+				let modname = (uri.username ? (uri.username + "@" + uri.host + uri.pathname) :  uri.pathname.substring(2))
 				let i = name.indexOf("@")
 				name = modname.substring(0,i)
 				let version = modname.substring(i + 1)
