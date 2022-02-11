@@ -294,6 +294,7 @@ export class Builder{
 			
 			if(externalModules.length){
 				let info = await kawix.importInfo(kawix.packageLoader)
+				console.info("> Using loader:", kawix.packageLoader)
 				await addInfo(info)
 
 				let mcode = []
