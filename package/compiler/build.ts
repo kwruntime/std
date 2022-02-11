@@ -129,6 +129,7 @@ export interface BuilderOptions{
 	target?: string 
 	minify?: any
 	esbuild?: any
+	npmEnv?: {[key:string]: string}
 	npmExternalModules?: string[] 
 	excludeNpmModules?: boolean
 }
@@ -276,10 +277,19 @@ export class Builder{
 			let reg = new Registry()
 			let mnames = []
 			for(let name of npmModules){
-				let i = name.lastIndexOf("@")
+				let uri = new URL("npm://" + name)
+				let text = name 
+				let modname = uri.pathname.substring(2)
+				let i = name.indexOf("@")
+				name = modname.substring(0,i)
+				let version = modname.substring(i + 1)
 				mnames.push({
-					name: name.substring(0, i),
-					version: name.substring(i + 1),
+					search: uri.search,
+					searchParams: uri.searchParams,
+					modname,
+					name,
+					version,
+					text
 				})
 			}
 			let externalModules = []
@@ -288,8 +298,8 @@ export class Builder{
 				mnames = []
 			}
 			else if(this.#options.npmExternalModules){
-				externalModules = mnames.filter((a)=> this.#options.npmExternalModules.indexOf(`${a.name}@${a.version}`) >= 0)
-				mnames = mnames.filter((a)=> this.#options.npmExternalModules.indexOf(`${a.name}@${a.version}`) < 0)
+				externalModules = mnames.filter((a)=> this.#options.npmExternalModules.indexOf(a.modname) >= 0)
+				mnames = mnames.filter((a)=> this.#options.npmExternalModules.indexOf(a.modname) < 0)
 			}
 			
 			if(externalModules.length){
@@ -302,9 +312,12 @@ export class Builder{
 				let code = `
 				
 				var loader = $$KModule.require(${JSON.stringify(info.request)})
+				var uri = new URL()
+
 				var reg = new loader.Registry()
+				reg.env = ${JSON.stringify(this.#options.npmEnv || {})}
 				var modReqs = ${JSON.stringify(externalModules)}
-				var modInfos = []
+				var modInfos = []				
 				if(modReqs.length == 1){
 					var modr= modReqs[0]
 					modInfos = [await reg.resolve(modr.name + "@" + modr.version)]
