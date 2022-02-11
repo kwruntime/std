@@ -303,6 +303,7 @@ export class Builder{
 			}
 			
 			if(externalModules.length){
+				console.info(this.#options.npmEnv)
 				let info = await kawix.importInfo(kawix.packageLoader)
 				console.info("> Using loader:", kawix.packageLoader)
 				await addInfo(info)
@@ -312,7 +313,6 @@ export class Builder{
 				let code = `
 				
 				var loader = $$KModule.require(${JSON.stringify(info.request)})
-				var uri = new URL()
 
 				var reg = new loader.Registry()
 				reg.env = ${JSON.stringify(this.#options.npmEnv || {})}
