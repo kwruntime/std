@@ -1,4 +1,5 @@
 import http from 'http'
+import Exception from '../util/exception.ts'
 import { AsyncEventEmitter } from "../async/events.ts"
 import * as async from '../util/async.ts'
 import {HttpContext, Reply, Request} from  './context.ts'
@@ -93,6 +94,10 @@ export class Server extends AsyncEventEmitter{
 		let addrinfo = this.#getAddress(address)
 		if(addrinfo.port){
 			this.#raw.listen(addrinfo.port, addrinfo.host)
+		}else if(addrinfo.path){
+			this.#raw.listen(addrinfo.path)
+		}else{
+			throw Exception.create("Failed to listen. Invalid address: " + address).putCode("INVALID_ADDRESS")
 		}
 		this.#raw.once("listening", def.resolve)
 		this.#raw.once("error", def.reject)
