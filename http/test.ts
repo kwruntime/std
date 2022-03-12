@@ -30,6 +30,7 @@ export class Program {
 		router.all("/ok", function(env){
 			env.reply.code(200).send({
 				hello:'world',
+				query: env.request.query,
 				path: env.request.uri.pathname
 			})
 		})

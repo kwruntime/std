@@ -4,14 +4,61 @@ import * as async from '../util/async.ts'
 import { AsyncEventEmitter } from "../async/events.ts"
 import qs from 'npm://qs@6.10.3'
 import safeJsonStringify from 'npm://safe-json-stringify@1.2.0'
+import Exception from '../util/exception.ts'
 import { Socket } from "net"
+import Zlib from 'zlib'
+
+
+// default parsers
+import {BufferParser} from "./parsers/buffer.ts"
+import {TextParser} from "./parsers/text.ts"
+import {JsonParser} from "./parsers/json"
+
 export interface HttpContext{
 	request: Request 
 	socket?: Socket
 	head?: any
 	reply?: Reply
+	error?: any
 }
 
+
+
+export class RequestBody{
+	#req: Request
+	constructor(request: Request){
+		this.#req = request
+	}
+
+	async buffer(){
+		return await BufferParser.parse(this.#req)
+	}
+
+	async text(){
+		let parser = this.#req.server.bodyParsers.get("text/plain") || TextParser
+		return await parser.parse(this.#req)
+	}
+
+	async json(){
+		let parser = this.#req.server.bodyParsers.get("application/json")|| JsonParser
+		return await parser.parse(this.#req)
+	}
+
+	async parse(){
+		let type = this.#req.headers["content-type"] || ''
+		type = type.split(";")[0]
+		let parser = this.#req.server.bodyParsers.get(type || "application/octect-stream")
+		if(!parser){
+			throw Exception.create(`Not available parser for type: ${type}`).putCode("NOT_AVAILABLE_PARSER")
+		}
+		return await parser.parse(this.#req)
+	}
+
+	get stream(){
+		return this.#req.stream
+	}
+
+}
 
 
 export class Request extends AsyncEventEmitter{
@@ -20,7 +67,7 @@ export class Request extends AsyncEventEmitter{
 	#query = null
 	#uri: URL
 	#server: any 
-
+	#body: RequestBody
 	params: {[key:string]: any}
 
 	constructor(raw: IncomingMessage, server: any){
@@ -42,31 +89,41 @@ export class Request extends AsyncEventEmitter{
 			
 			let search = this.uri.search
 			if(search.startsWith("?")) search = search.substring(1)
-			qs.parse(search, )
-			let parts = search.split("&")
-			this.#query = {}
-			for(let part of parts){
-				let i= part.indexOf("")
-				let name = part.substring(0, i)
-				let value = decodeURIComponent(part.substring(i+1))
-				this.#query[name] = value
-			}
+			this.#query = qs.parse(search)
 		}
 		return this.#query
 	}
 
-	get body(){
-		return null
+	get stream(){
+		// get correct stream
+		let encoding = this.#raw.headers["content-encoding"]
+		if(encoding =="gzip"){
+			let st = Zlib.createGunzip()
+			this.#raw.pipe(st)
+			this.#raw.on("error", function(){})
+			return st 				
+		}
+
+		if(encoding =="brotli"){
+			let st = Zlib.createBrotliDecompress()
+			this.#raw.pipe(st)
+			this.#raw.on("error", function(){})
+			return st 				
+		}
+
+		return this.#raw
 	}
 
-	get data(){
-		return Object.assign({}, this.query, this.body || {})
+	get body(){
+		if(!this.#body){
+			this.#body = new RequestBody(this)
+		}
+		return this.#body
 	}
 
 	get headers(){
 		return this.#raw.headers
 	}
-
 	/*
 	get id(){
 		return this.#raw.id
@@ -107,7 +164,7 @@ export class Request extends AsyncEventEmitter{
 			if(addr.port){
 				this.#uri = new URL(`http://${addr.address}:${addr.port}${this.url}`)
 			}else{
-				this.#uri = new URL(`unix://${addr}${this.url}`)
+				this.#uri = new URL(`http://127.0.0.1:0${this.url}`)
 			}			
 		}
 		return this.#uri

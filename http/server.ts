@@ -3,7 +3,8 @@ import Exception from '../util/exception.ts'
 import { AsyncEventEmitter } from "../async/events.ts"
 import * as async from '../util/async.ts'
 import {HttpContext, Reply, Request} from  './context.ts'
-
+import fs from 'fs'
+// import {JsonParser} from './parsers/json'
 
 export class Server extends AsyncEventEmitter{
 
@@ -16,13 +17,17 @@ export class Server extends AsyncEventEmitter{
 	requestTimeout = 0
 	trustProxy = true 
 	maxConnections : number = 50000
+	maxBodyLength = 100*1024*1024
 
-	
+	#bodyParsers = new Map<string,any>()
 
 	get raw(){
 		return this.#raw
 	}
 
+	get bodyParsers(){
+		return this.#bodyParsers
+	}
 
 	constructor(server?: http.Server){
 		super()
@@ -33,7 +38,6 @@ export class Server extends AsyncEventEmitter{
 
 		if(!server){
 			server = http.createServer({
-				
 			})
 		}
 
@@ -88,13 +92,14 @@ export class Server extends AsyncEventEmitter{
 		return this.#raw.address()
 	}
 
-	async listen(address: string | number){
+	async listen(address: string | number, force = false){
 
 		let def = new async.Deferred<void>()
 		let addrinfo = this.#getAddress(address)
-		if(addrinfo.port){
+		if(addrinfo.host){
 			this.#raw.listen(addrinfo.port, addrinfo.host)
 		}else if(addrinfo.path){
+			if(force && fs.existsSync(addrinfo.path)) await fs.promises.unlink(addrinfo.path)
 			this.#raw.listen(addrinfo.path)
 		}else{
 			throw Exception.create("Failed to listen. Invalid address: " + address).putCode("INVALID_ADDRESS")
@@ -125,6 +130,7 @@ export class Server extends AsyncEventEmitter{
 		}
 		else if(address.startsWith("tcp://")){
 			let part = address.substring(6)
+			
 			let ipv6 = part.match(/\[(.*)\]\:(\d+)/)
 			let ipv4 = part.match(/([\d\.]+)\:(\d+)/)
 			let host = ipv6?.[1] || ipv4?.[1]

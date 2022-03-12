@@ -1,6 +1,7 @@
-import findmyway from 'npm://find-my-way@5.1.1'
+import Trouter,{Methods} from 'npm://trouter@3.2.0'
 import { Server } from './server.ts'
 import {HttpContext} from './context.ts'
+import {Exception} from '../util/exception.ts'
 
 export interface RouterHttpListener{
 	(context: HttpContext) : void
@@ -8,11 +9,15 @@ export interface RouterHttpListener{
 
 export class Router{
 
-	#raw: findmyway.Instance<findmyway.HTTPVersion.V1>
-	#listeners = new Map<string, Map<any, Function>>()
+	//#raw: findmyway.Instance<findmyway.HTTPVersion.V1>
+	//#listeners = new Map<string, Map<any, Function>>()
+
+	#raw: Trouter
+	
 	
 	constructor(){
-		this.#raw = findmyway()
+		//this.#raw = findmyway()
+		this.#raw = new Trouter()
 	}
 
 	get raw(){
@@ -24,15 +29,63 @@ export class Router{
 	}
 
 	attachToRouter(path: string, router: Router){
-		return router.all(path + "/*", (context) => {
-			let url = "/" + context.request.params["*"]
+		return router.use(path, (context) => {
+			//let url = "/" + context.request.params["*"]
+			//context.request.$seturl(url)
+			let url = context.request.url.substring(path.length)
 			context.request.$seturl(url)
 			return this.lookup(context) 
 		})
 	}
 
+	#NotFound(context: HttpContext){
+		let json = {
+			message: "Page not found",
+			code: "ERROR404"
+		}
+		context.reply.code(404).header("content-type","application/json;charset=utf8")
+		context.reply.send(json)
+	}
+
+	#Error(context: HttpContext){
+		let json = {
+			message: context.error.message || String(context.error),
+			code: context.error.code || context.error.type || "Unknown"
+		}
+		
+		context.reply.code(500).header("content-type","application/json;charset=utf8")
+		context.reply.send(json)
+	}
+
 	async lookup(context: HttpContext){
-		//return this.#raw.lookup(context.request.raw, context.reply.raw, context)
+		let obj = this.#raw.find(context.request.method as Methods, context.request.uri.pathname)
+		context.request.params = obj.params
+		if(!obj.handlers.length){
+			// find ERROR404
+			obj = this.#raw.find("404" as Methods, context.request.url)
+			if(!obj.handlers.length){
+				obj.handlers = [this.#NotFound.bind(this)]
+			}
+		}
+		for(let fn of obj.handlers){
+			try{
+				await fn(context)
+			}catch(e){
+				// return 500 error
+				context.error = e 
+				if(!context.reply.raw.writableEnded){
+					obj = this.#raw.find("ERROR" as Methods, context.request.url)
+					let fn1 = obj.handlers[0] || this.#Error.bind(this)
+					try{
+						await fn1(context)
+					}catch(e){
+						console.error("> kwruntime/http server ERROR:", e.message)
+					}
+				}
+			}
+		}
+
+		/*
 		let defaultResult = this.#raw.find("ERROR404", context.request.uri.pathname)
 		try{
 			let result = this.#raw.find(context.request.method, context.request.uri.pathname)
@@ -57,26 +110,27 @@ export class Router{
 					message: e.message
 				}
 			})
-		}
+		}*/
+
 	}
 
-	on(method: "ERROR404" | findmyway.HTTPMethod | findmyway.HTTPMethod[], path: string, listener: RouterHttpListener){
-
-		let realfunc = function(a, b, params){
-			this.request.params = params
-			return listener(this)
-		}
+	on(method: Methods | "ALL" | "USE", path: string, listener: RouterHttpListener){
+		/*
 		let listens = this.#listeners.get(String(method))
 		if(!listens){
 			listens = new Map<any, Function>()
 			this.#listeners.set(String(method), listens)
 		}
 		listens.set(listener, realfunc)
+		*/
 		if(method == "ALL"){
-			this.#raw.all(path, realfunc)
+			this.#raw.all(path, listener)
+		}
+		else if(method == "USE"){
+			this.#raw.use(path, listener)
 		}
 		else{
-			this.#raw.on(method, path, realfunc)
+			this.#raw.add(method, path, listener)
 		}
 		return this 
 	}
@@ -178,16 +232,23 @@ export class Router{
 		return this.on("UNSUBSCRIBE", path, listener)
 	}
 
+	use(path: string, listener: RouterHttpListener){
+		return this.#raw.use(path, listener)
+	}
 
-	off(method: findmyway.HTTPMethod | findmyway.HTTPMethod[], listener: RouterHttpListener){
-		let listens = this.#listeners.get(String(method))
+
+	off(method: Methods | "ALL" | "USE", listener: RouterHttpListener){
+
+		/*let listens = this.#listeners.get(String(method))
 		if(listens){
 			let func = listens.get(listener)
 			if(func){
 				this.#raw.off(method, func)
 				listens.delete(listener)
 			}
-		}
+		}*/
+		throw Exception.create("Not implemented method").putCode("NOT_IMPLEMENTED")
+		
 		
 	}
 

@@ -160,7 +160,7 @@ export class Builder{
 		this.#code.push("var $$Files= {}, $$NPMRequires=null, $$NodeRequire = null, $$filename = null; try{ $$NodeRequire = require; }catch(e){}; try{ $$filename = __filename; }catch(e){}")
 
 
-		let npmModules = new Set<string>(), npmFile = '', preloadCode = []
+		let npmModules = new Set<string>(), nodeFiles = new Set<string>(), npmFile = '', preloadCode = []
 		let addInfo = async (info: ModuleImportInfo) => {
 
 			let nstr = []
@@ -168,28 +168,29 @@ export class Builder{
 			
 			
 			loaded[info.request] = true
+			nstr.push("var $$modParams = arguments[0]")
 			for(let i=0;i<info.vars.names.length;i++){
 				let name = info.vars.names[i]
 				if(name == "module"){
-					nstr.push("var module = arguments[0]['module']")
+					nstr.push("var module = $$modParams['module']")
 				}
 				else if(name == "require"){
-					nstr.push("var require = arguments[0]['require']")
+					nstr.push("var require = $$modParams['require']")
 				}
 				else if(name == "KModule"){
-					nstr.push("var KModule = arguments[0]['KModule']")
+					nstr.push("var KModule = $$modParams['KModule']")
 				}
 				else if(name == "global"){
-					nstr.push("var global = arguments[0]['global']")
+					nstr.push("var global = $$modParams['global']")
 				}
 				else if(name == "Buffer"){
-					nstr.push("var Buffer = arguments[0]['Buffer']")
+					nstr.push("var Buffer = $$modParams['Buffer']")
 				}
 				else if(name == "exports"){
-					nstr.push(`var exports = arguments[0]['exports']`)
+					nstr.push(`var exports = $$modParams['exports']`)
 				}
 				else if(name == "asyncRequire"){
-					nstr.push(`var asyncRequire = arguments[0]['asyncRequire']`)
+					nstr.push(`var asyncRequire = $$modParams['asyncRequire']`)
 				}
 				else if(name == "preloadedModules"){
 					nstr.push(`var preloadedModules = []`)
@@ -203,7 +204,7 @@ export class Builder{
 					nstr.push(`var ${name} = ${JSON.stringify(info.vars.values[i])}`)
 				}
 			}
-			nstr.push("if($$NodeRequire) require = $$NodeRequire")
+			nstr.push("if($$NodeRequire) require = $$NodeRequire;")
 	
 			for(let i=0;i< info.preloadedModules.length;i++){
 				let mod = info.preloadedModules[i]
@@ -228,7 +229,7 @@ export class Builder{
 						*/
 						let name = mod.request.substring(6)
 						npmModules.add(name)
-						nstr.push(`preloadedModules[${i}] = $$NPMRequires[${JSON.stringify(name)}]`)						
+						nstr.push(`preloadedModules[${i}] = $$NPMRequires[${JSON.stringify(name)}]`)				
 						
 					}
 					else if(/kwruntime\/core(\@[0-9\.A-Za-z]+)?\/src\/kwruntime(\.ts)?$/.test(mod.request)){
@@ -238,6 +239,10 @@ export class Builder{
 					else{
 						nstr.push(`preloadedModules[${i}] = KModule.require(${JSON.stringify(mod.request)})`)
 					}
+				}
+				else if(mod.mode == "node"){
+					nstr.push(`preloadedModules[${i}] = $$NPMRequires[${JSON.stringify(mod.location.main)}]`)
+					nodeFiles.add(mod.location.main)
 				}
 			}
 			//var [${info.vars.names.join(",")}] = arguments[0]
@@ -355,13 +360,33 @@ export class Builder{
 				let mfolder = Path.dirname(Path.dirname(modInfos[0].folder))
 				let mfile = Path.join(mfolder, "$main.ts")
 				let mfile2 = Path.join(mfolder, "$compiled.ts")
-				mcode.push("class NPMModules{")
+				//mcode.push("class NPMModules{")
 				for(let mod of mnames){
+					/*
 					mcode.push(`\tstatic get ["${mod.name}@${mod.version}"](){`)
 					mcode.push(`\t\treturn re${"q"}uire("${mod.name}")`)
 					mcode.push("}")
+					*/
+
+					mcode.push(`Object.defineProperty($$NPMRequires, "${mod.name}@${mod.version}", {
+						get(){
+							return re${"q"}uire("${mod.name}")
+						}
+					})`)
 				}
-				mcode.push("}; export default NPMModules")
+
+				
+				if(nodeFiles.size){
+					for(let file of nodeFiles){
+						mcode.push(`Object.defineProperty($$NPMRequires, ${JSON.stringify(file)}, {
+							get(){
+								return re${"q"}uire(${JSON.stringify(file)})
+							}
+						})`)
+					}
+				}
+
+				//mcode.push("}; console.info('here-->'); $$modParams.exports.default = NPMModules")
 				await fs.promises.writeFile(mfile,mcode.join("\n"))
 				
 
@@ -393,6 +418,8 @@ export class Builder{
 				await addInfo(info)
 				npmFile = mfile2
 			}
+
+			
 		}
 
 		//console.info("NPM Modules:", [...npmModules])
@@ -408,7 +435,7 @@ export class Builder{
 			str.push(`if(!$$KModule.global.Buffer) $$KModule.global.Buffer = $$KModule.re${"q"}uire('${nodeTranslations.buffer}').Buffer`)
 		}
 		if(npmFile){
-			str.push(`$$NPMRequires = $$KModule.re${"q"}uire("${npmFile}").default`)	
+			str.push(`$$NPMRequires = {}; $$KModule.re${"q"}uire("${npmFile}").default`)	
 		}
 		if(preloadCode.length){
 			preloadCode[preloadCode.length - 1] = `$$KModule.$re${"q"}uire([${JSON.stringify(info.request)}], $$module)`
