@@ -82,7 +82,7 @@ export class Request extends AsyncEventEmitter{
 		super()
 		this.#raw = raw
 		this.#server = server
-		this.props.url = raw.url
+		this.urlInfo.current = raw.url
 	}
 
 	get raw(){
