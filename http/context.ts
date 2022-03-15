@@ -60,6 +60,12 @@ export class RequestBody{
 
 }
 
+export class RequestUrlInfo{
+	current: string 
+	parent: string 
+	original: string 
+}
+
 
 export class Request extends AsyncEventEmitter{
 
@@ -67,13 +73,16 @@ export class Request extends AsyncEventEmitter{
 	#query = null
 	#uri: URL
 	#server: any 
-	#body: RequestBody
+	#body: RequestBody	
 	params: {[key:string]: any}
+	urlInfo = new RequestUrlInfo()
+
 
 	constructor(raw: IncomingMessage, server: any){
 		super()
 		this.#raw = raw
 		this.#server = server
+		this.props.url = raw.url
 	}
 
 	get raw(){
@@ -174,10 +183,13 @@ export class Request extends AsyncEventEmitter{
 		return this.#raw.url
 	}
 
-	$seturl(url: string){
+	private $seturl(url: string){
 		this.#raw.url = url 
 		this.#uri = null 
+		this.urlInfo.current = url
 	}
+
+	
 }
 
 export class Reply extends AsyncEventEmitter{

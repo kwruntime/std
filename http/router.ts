@@ -9,10 +9,8 @@ export interface RouterHttpListener{
 
 export class Router{
 
-	//#raw: findmyway.Instance<findmyway.HTTPVersion.V1>
-	//#listeners = new Map<string, Map<any, Function>>()
-
 	#raw: Trouter
+	disableNotFound = false
 	
 	
 	constructor(){
@@ -30,8 +28,6 @@ export class Router{
 
 	attachToRouter(path: string, router: Router){
 		return router.use(path, (context) => {
-			//let url = "/" + context.request.params["*"]
-			//context.request.$seturl(url)
 			let url = context.request.url.substring(path.length)
 			context.request.$seturl(url)
 			return this.lookup(context) 
@@ -50,7 +46,8 @@ export class Router{
 	#Error(context: HttpContext){
 		let json = {
 			message: context.error.message || String(context.error),
-			code: context.error.code || context.error.type || "Unknown"
+			code: context.error.code || context.error.type || "Unknown",
+			stack: context.error.stack
 		}
 		
 		context.reply.code(500).header("content-type","application/json;charset=utf8")
@@ -61,19 +58,22 @@ export class Router{
 		let obj = this.#raw.find(context.request.method as Methods, context.request.uri.pathname)
 		context.request.params = obj.params
 		if(!obj.handlers.length){
-			// find ERROR404
-			obj = this.#raw.find("404" as Methods, context.request.url)
-			if(!obj.handlers.length){
-				obj.handlers = [this.#NotFound.bind(this)]
+			if(!this.disableNotFound){
+				// find ERROR404
+				obj = this.#raw.find("404" as Methods, context.request.url)
+				if(!obj.handlers.length){
+					obj.handlers = [this.#NotFound.bind(this)]
+				}
 			}
 		}
 		for(let fn of obj.handlers){
 			try{
 				await fn(context)
+				if(context.reply?.raw?.writableEnded) break 
 			}catch(e){
-				// return 500 error
+				
 				context.error = e 
-				if(!context.reply.raw.writableEnded){
+				if(!context.reply?.raw?.writableEnded){
 					obj = this.#raw.find("ERROR" as Methods, context.request.url)
 					let fn1 = obj.handlers[0] || this.#Error.bind(this)
 					try{
@@ -82,47 +82,12 @@ export class Router{
 						console.error("> kwruntime/http server ERROR:", e.message)
 					}
 				}
+
 			}
 		}
-
-		/*
-		let defaultResult = this.#raw.find("ERROR404", context.request.uri.pathname)
-		try{
-			let result = this.#raw.find(context.request.method, context.request.uri.pathname)
-			if(result){
-				await result.handler.call(context, context.request.raw, context.reply.raw, result.params)
-			}
-			else if(defaultResult){
-				await defaultResult.handler.call(context, context.request.raw, context.reply.raw, defaultResult.params)
-			}
-			else{
-				return context.reply.code(404).send({
-					error: {
-						code: 'ERROR404',
-						message: 'NOT FOUND'
-					}
-				})
-			}
-		}catch(e){
-			return context.reply.code(500).send({
-				error: {
-					code: 'ERROR500',
-					message: e.message
-				}
-			})
-		}*/
-
 	}
 
 	on(method: Methods | "ALL" | "USE", path: string, listener: RouterHttpListener){
-		/*
-		let listens = this.#listeners.get(String(method))
-		if(!listens){
-			listens = new Map<any, Function>()
-			this.#listeners.set(String(method), listens)
-		}
-		listens.set(listener, realfunc)
-		*/
 		if(method == "ALL"){
 			this.#raw.all(path, listener)
 		}
@@ -232,8 +197,14 @@ export class Router{
 		return this.on("UNSUBSCRIBE", path, listener)
 	}
 
-	use(path: string, listener: RouterHttpListener){
-		return this.#raw.use(path, listener)
+	use(path: string, listener: RouterHttpListener){		
+		// change URL in request
+		const realHandler = (context: HttpContext) => {
+			context.request.urlInfo.parent = context.request.url
+			context.request["$seturl"](context.request.url.substring(path.length))
+			return listener(context)
+		}
+		return this.#raw.use(path, realHandler)
 	}
 
 
