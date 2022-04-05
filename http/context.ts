@@ -46,6 +46,8 @@ export class RequestBody{
 
 	async parse(){
 		let type = this.#req.headers["content-type"] || ''
+		if(!type) return {}
+
 		type = type.split(";")[0]
 		let parser = this.#req.server.bodyParsers.get(type || "application/octect-stream")
 		if(!parser){
@@ -74,7 +76,9 @@ export class Request extends AsyncEventEmitter{
 	#uri: URL
 	#server: any 
 	#body: RequestBody	
+
 	params: {[key:string]: any}
+	data: {[key:string]: any} = {}
 	urlInfo = new RequestUrlInfo()
 
 
@@ -274,13 +278,13 @@ export class Reply extends AsyncEventEmitter{
 	}
 
 	get raw(){
-		if(!this.#headSent){
-			this.#sendHead()
-		}
 		return this.#raw
 	}
 
 	async send(data: any){
+		if(!this.#headSent){
+			this.#sendHead()
+		}
 		if(data instanceof Promise){
 			data = await data 
 		}

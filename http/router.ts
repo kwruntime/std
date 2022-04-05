@@ -10,7 +10,7 @@ export interface RouterHttpListener{
 export class Router{
 
 	#raw: Trouter
-	disableNotFound = false
+	enableNotFound = false
 	
 	
 	constructor(){
@@ -45,20 +45,23 @@ export class Router{
 
 	#Error(context: HttpContext){
 		let json = {
-			message: context.error.message || String(context.error),
-			code: context.error.code || context.error.type || "Unknown",
-			stack: context.error.stack
+			error: {
+				message: context.error.message || String(context.error),
+				code: context.error.code || context.error.type || "Unknown",
+				stack: context.error.stack
+			}
 		}
 		
 		context.reply.code(500).header("content-type","application/json;charset=utf8")
 		context.reply.send(json)
+		console.info("Status code:", context.reply.raw.statusCode)
 	}
 
 	async lookup(context: HttpContext){
 		let obj = this.#raw.find(context.request.method as Methods, context.request.uri.pathname)
 		context.request.params = obj.params
 		if(!obj.handlers.length){
-			if(!this.disableNotFound){
+			if(this.enableNotFound){
 				// find ERROR404
 				obj = this.#raw.find("404" as Methods, context.request.url)
 				if(!obj.handlers.length){
@@ -66,6 +69,8 @@ export class Router{
 				}
 			}
 		}
+
+		//console.info("handlers:", context.request.url, obj.handlers)
 		for(let fn of obj.handlers){
 			try{
 				await fn(context)
@@ -197,12 +202,19 @@ export class Router{
 		return this.on("UNSUBSCRIBE", path, listener)
 	}
 
-	use(path: string, listener: RouterHttpListener){		
+	use(path: string, listener: RouterHttpListener | Router){		
 		// change URL in request
 		const realHandler = (context: HttpContext) => {
 			context.request.urlInfo.parent = context.request.url
 			context.request["$seturl"](context.request.url.substring(path.length))
-			return listener(context)
+			//console.info("new url:",context.request.url)
+			let route = listener as Router
+			if(typeof route.lookup == "function"){
+				return route.lookup(context)
+			}
+			else{
+				return (listener as RouterHttpListener)(context)
+			}
 		}
 		return this.#raw.use(path, realHandler)
 	}
