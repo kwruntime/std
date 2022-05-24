@@ -9,12 +9,15 @@ export class BufferParser{
 		let maxlen = req.server.maxBodyLength
 		let buffers = []
 
+		if(req.raw.readableEnded){
+			throw  Exception.create("Body can be readed only one time").putCode("INVALID_OPERATION")
+		}
+
 		req.stream.on("error", def.reject)
 		req.stream.on("data", function(bytes){
 			len += bytes.length 
 			if(len >= maxlen){
-				def.reject()
-				return Exception.create("Body exceeds max length").putCode("MAX_LENGTH_EXCEEDED")
+				return def.reject(Exception.create("Body exceeds max length").putCode("MAX_LENGTH_EXCEEDED"))
 			}
 			buffers.push(bytes)
 		})

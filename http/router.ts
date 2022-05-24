@@ -10,9 +10,15 @@ export interface RouterHttpListener{
 export class Router{
 
 	#raw: Trouter
+
+	/*
 	enableNotFound = false
-	
-	
+	enableUnhandled = false 
+	*/
+
+	catchNotFound = false 
+	catchUnfinished = false
+
 	constructor(){
 		//this.#raw = findmyway()
 		this.#raw = new Trouter()
@@ -57,20 +63,40 @@ export class Router{
 		console.info("Status code:", context.reply.raw.statusCode)
 	}
 
+
 	async lookup(context: HttpContext){
-		let obj = this.#raw.find(context.request.method as Methods, context.request.uri.pathname)
-		context.request.params = obj.params
-		if(!obj.handlers.length){
-			if(this.enableNotFound){
-				// find ERROR404
-				obj = this.#raw.find("404" as Methods, context.request.url)
-				if(!obj.handlers.length){
-					obj.handlers = [this.#NotFound.bind(this)]
-				}
+		
+		
+		if(await this.$lookup(context) === false){
+			if(this.catchNotFound){
+				return await this.$lookup(context, "404")
 			}
 		}
+		
+		if(context.reply){
+			if((!context.reply.raw.writableEnded) && this.catchUnfinished){
+				return await this.$lookup(context, "UNFINISHED")
+			}
+		}
+	}
 
-		//console.info("handlers:", context.request.url, obj.handlers)
+	async $lookup(context: HttpContext, method = null){
+
+		if(!method) method = context.request.method as Methods
+		let obj = this.#raw.find(method, context.request.uri.pathname)
+		context.request.params = obj.params
+		if(!obj.handlers.length){
+			if(method == "404"){
+				obj.handlers = [this.#NotFound.bind(this)]
+			}
+			if(method == "UNFINISHED"){
+				obj.handlers = [this.#NotFound.bind(this)]
+			}
+		}		
+		if(!obj.handlers.length) return false 
+		
+		let url = context.request.url 		
+		//let handlers = [].concat(obj.handlers)
 		for(let fn of obj.handlers){
 			try{
 				await fn(context)
@@ -79,7 +105,7 @@ export class Router{
 				
 				context.error = e 
 				if(!context.reply?.raw?.writableEnded){
-					obj = this.#raw.find("ERROR" as Methods, context.request.url)
+					obj = this.#raw.find("ERROR" as Methods, url)
 					let fn1 = obj.handlers[0] || this.#Error.bind(this)
 					try{
 						await fn1(context)
@@ -90,6 +116,8 @@ export class Router{
 
 			}
 		}
+
+
 	}
 
 	on(method: Methods | "ALL" | "USE", path: string, listener: RouterHttpListener){
