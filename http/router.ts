@@ -65,14 +65,11 @@ export class Router{
 
 
 	async lookup(context: HttpContext){
-		
-		
 		if(await this.$lookup(context) === false){
 			if(this.catchNotFound){
 				return await this.$lookup(context, "404")
 			}
-		}
-		
+		}		
 		if(context.reply){
 			if((!context.reply.raw.writableEnded) && this.catchUnfinished){
 				return await this.$lookup(context, "UNFINISHED")
@@ -83,16 +80,17 @@ export class Router{
 	async $lookup(context: HttpContext, method = null){
 
 		if(!method) method = context.request.method as Methods
-		let obj = this.#raw.find(method, context.request.uri.pathname)
+		let obj:any = {}
+		if((method == "404") || (method == "UNFINISHED")){
+			obj = {
+				handlers: [this.#NotFound.bind(this)],
+				params: {}
+			}
+		}
+		else{
+			obj = this.#raw.find(method, context.request.uri.pathname)
+		}
 		context.request.params = obj.params
-		if(!obj.handlers.length){
-			if(method == "404"){
-				obj.handlers = [this.#NotFound.bind(this)]
-			}
-			if(method == "UNFINISHED"){
-				obj.handlers = [this.#NotFound.bind(this)]
-			}
-		}		
 		if(!obj.handlers.length) return false 
 		
 		let url = context.request.url 		
@@ -102,7 +100,6 @@ export class Router{
 				await fn(context)
 				if(context.reply?.raw?.writableEnded) break 
 			}catch(e){
-				
 				context.error = e 
 				if(!context.reply?.raw?.writableEnded){
 					obj = this.#raw.find("ERROR" as Methods, url)
