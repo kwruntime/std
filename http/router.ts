@@ -10,18 +10,21 @@ export interface RouterHttpListener{
 export class Router{
 
 	#raw: Trouter
-
-	/*
-	enableNotFound = false
-	enableUnhandled = false 
-	*/
+	#internal: Trouter
 
 	catchNotFound = false 
 	catchUnfinished = false
 
+	static internalMethods = [
+		"ERROR",
+		"NOTFOUND",
+		"UNFINISHED"
+	]
+
 	constructor(){
 		//this.#raw = findmyway()
 		this.#raw = new Trouter()
+		this.#internal = new Trouter()
 	}
 
 	get raw(){
@@ -67,7 +70,7 @@ export class Router{
 	async lookup(context: HttpContext){
 		if(await this.$lookup(context) === false){
 			if(this.catchNotFound){
-				return await this.$lookup(context, "404")
+				return await this.$lookup(context, "NOTFOUND")
 			}
 		}		
 		if(context.reply){
@@ -77,40 +80,39 @@ export class Router{
 		}
 	}
 
-	async $lookup(context: HttpContext, method = null){
+	async $lookup(context: HttpContext, method = null, url = null){
 
 		if(!method) method = context.request.method as Methods
 		let obj:any = {}
-		if((method == "404") || (method == "UNFINISHED")){
-			obj = {
-				handlers: [this.#NotFound.bind(this)],
-				params: {}
+		if(Router.internalMethods.indexOf(method) >= 0){
+			obj = this.#internal.find(method, url || context.request.uri.pathname)
+			if(!obj.handlers.length){
+				let func = null 
+				if(method == "ERROR") func = this.#Error.bind(this)
+				else func = this.#NotFound.bind(this)
+				obj.handlers.push(func)
 			}
 		}
 		else{
-			obj = this.#raw.find(method, context.request.uri.pathname)
+			obj = this.#raw.find(method, url || context.request.uri.pathname)
 		}
+		
 		context.request.params = obj.params
 		if(!obj.handlers.length) return false 
 		
-		let url = context.request.url 		
-		//let handlers = [].concat(obj.handlers)
+		let ourl = context.request.uri.pathname	
 		for(let fn of obj.handlers){
 			try{
 				await fn(context)
 				if(context.reply?.raw?.writableEnded) break 
 			}catch(e){
-				context.error = e 
-				if(!context.reply?.raw?.writableEnded){
-					obj = this.#raw.find("ERROR" as Methods, url)
-					let fn1 = obj.handlers[0] || this.#Error.bind(this)
-					try{
-						await fn1(context)
-					}catch(e){
-						console.error("> kwruntime/http server ERROR:", e.message)
+				console.error("> kwruntime/http server ERROR:", e.message)
+				if(method != "ERROR"){
+					context.error = e 
+					if(!context.reply?.raw?.writableEnded){
+						await this.$lookup(context, "ERROR", ourl)
 					}
 				}
-
 			}
 		}
 
@@ -118,6 +120,8 @@ export class Router{
 	}
 
 	on(method: Methods | "ALL" | "USE", path: string, listener: RouterHttpListener){
+
+		
 		if(method == "ALL"){
 			this.#raw.all(path, listener)
 		}
@@ -125,6 +129,11 @@ export class Router{
 			this.#raw.use(path, listener)
 		}
 		else{
+			if(Router.internalMethods.indexOf(method) >= 0){
+				this.#internal.add(method, path, listener)
+				return this
+			}
+
 			this.#raw.add(method, path, listener)
 		}
 		return this 
@@ -241,6 +250,7 @@ export class Router{
 				return (listener as RouterHttpListener)(context)
 			}
 		}
+
 		return this.#raw.use(path, realHandler)
 	}
 
