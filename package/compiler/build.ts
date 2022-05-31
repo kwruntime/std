@@ -457,6 +457,7 @@ export class Builder{
 		stream.once("error", def.reject)
 		
 		stream.write(this.source.code)
+		stream.end()
 		stream.once("finish", def.resolve)
 		await def.promise 
 	}

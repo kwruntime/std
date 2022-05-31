@@ -234,8 +234,8 @@ export class Registry{
         if(!data || needcheck){
 
             let uid = parseInt(String(Date.now()/24*3*3600000)).toString() + ".json"
-			let pack = await import("https://unpkg.com/pnpm/package.json?date=" + uid)
-            let version = data && data.version
+			let pack = await import(`https://unpkg.com/pnpm@${this.pnpmVersion}/package.json?date=${uid}`)
+            let version = data?.version
             if(pack.version != version){
 
                 console.info("> Installing/updating pnpm version:", this.pnpmVersion)

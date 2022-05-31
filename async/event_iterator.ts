@@ -9,6 +9,7 @@ export class EventIterator{
     #deferred: Deferred<void>
     #events: string[]
     #funcs: Array<(...args:any)=> void> = []
+    #stopped = false 
 
     constructor(parent: AsyncEventEmitter, events: string[]){
         this.#parent = parent
@@ -17,6 +18,7 @@ export class EventIterator{
 
 
     stop(){
+        this.#stopped = true
         if(this.#deferred){
             this.#deferred.reject(Exception.create("Iterator stopped").putCode("ITERATOR_STOPPED"))
         }
@@ -55,7 +57,7 @@ export class EventIterator{
         }
 
         try{
-            while(true){
+            while(!this.#stopped){
                 if(items.length){
                     while(items.length){
                         let item = items.shift()
