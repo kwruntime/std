@@ -268,6 +268,8 @@ export class Reply extends AsyncEventEmitter{
 	}
 
 	#sendHead(){
+		if(this.#raw.headersSent) return 
+		
 		this.#raw.statusCode = this.#statusCode
 		let keys = this.#headers.keys()
 		for(let key of keys){
@@ -282,6 +284,9 @@ export class Reply extends AsyncEventEmitter{
 	}
 
 	async send(data: any){
+		if(!this.#raw.writable || this.#raw.writableEnded) return 
+
+
 		if(!this.#headSent){
 			this.#sendHead()
 		}
