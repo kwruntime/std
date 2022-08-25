@@ -44,16 +44,39 @@ export class RequestBody{
 		return await parser.parse(this.#req)
 	}
 
-	async parse(){
+	async tryParse(){
 		let type = this.#req.headers["content-type"] || ''
-		if(!type) return {}
+		if(!type){
+			return {
+				type: '',
+				data: {},
+				available: true
+			}
+		}
 
 		type = type.split(";")[0]
-		let parser = this.#req.server.bodyParsers.get(type || "application/octect-stream")
+		type = type || "application/octect-stream"
+		let parser = this.#req.server.bodyParsers.get()
 		if(!parser){
-			throw Exception.create(`Not available parser for type: ${type}`).putCode("NOT_AVAILABLE_PARSER")
+			return {
+				type,
+				data: null,
+				available: false
+			}
 		}
-		return await parser.parse(this.#req)
+		return {
+			type,
+			data: await parser.parse(this.#req),
+			available: true
+		}
+	}
+
+	async parse(){
+		let data = await this.tryParse()
+		if(!data.available){
+			throw Exception.create(`Not available parser for type: ${data.type}`).putCode("NOT_AVAILABLE_PARSER")
+		}
+		return data.data
 	}
 
 	get stream(){
