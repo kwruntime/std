@@ -248,6 +248,9 @@ export class Reply extends AsyncEventEmitter{
 
 	header(key: string, value: any){
 		this.#headers.set(key, value)
+		if(this.#headSent){
+			this.#raw.setHeader(key, value)
+		}
 		return this 
 	}
 
@@ -330,7 +333,7 @@ export class Reply extends AsyncEventEmitter{
 			}
 			if(Buffer.isBuffer(data)){
 				if(!this.#type){
-					this.type("text/plain")
+					this.type("text/plain;charset=utf8")
 				}
 				this.#raw.end(data)
 			}
