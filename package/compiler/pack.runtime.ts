@@ -1,6 +1,6 @@
 
 
-import tar from 'https://esm.sh/tar@6.1.11'
+import tar from 'npm://tar@6.1.11'
 import * as async from 'gh+/kwruntime/std@1.1.4/util/async.ts'
 import fs from 'fs'
 import Zlib from 'zlib'
