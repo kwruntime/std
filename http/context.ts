@@ -251,6 +251,9 @@ export class Reply extends AsyncEventEmitter{
 		if(this.#headSent){
 			this.#raw.setHeader(key, value)
 		}
+		if(key == "content-type"){
+			this.#type = value
+		}
 		return this 
 	}
 
