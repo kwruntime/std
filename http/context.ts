@@ -56,7 +56,7 @@ export class RequestBody{
 
 		type = type.split(";")[0]
 		type = type || "application/octect-stream"
-		let parser = this.#req.server.bodyParsers.get()
+		let parser = this.#req.server.bodyParsers.get(type)
 		if(!parser){
 			return {
 				type,
