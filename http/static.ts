@@ -113,7 +113,7 @@ export class Static{
             let etagStr = [file]
             etagStr.push(stats.mtimeMs)
             etagStr.push(stats.size)
-            crypto.createHash("md5").update(etagStr.join(">")).digest("hex")
+            etag = crypto.createHash("md5").update(etagStr.join(">")).digest("hex")
             let rEtag = context.request.headers["if-none-match"]
             if(rEtag == etag){
                 return context.reply.code(304).send({
