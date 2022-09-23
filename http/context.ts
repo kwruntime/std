@@ -122,9 +122,9 @@ export class Request extends AsyncEventEmitter{
 
 	constructor(raw: IncomingMessage, server: any){
 		super()
+		this.#raw = raw
 		this.$pushUrl(raw.url)
 		this.urlInfo = new RequestUrlInfo(this.#urls)
-		this.#raw = raw
 		this.#server = server
 		//this.urlInfo.current = raw.url
 	}
