@@ -1,364 +1,387 @@
-//import Trouter,{Methods} from 'npm://trouter@3.2.0'
-import { Server } from './server.ts'
-import {HttpContext} from './context.ts'
-import {Exception} from '../util/exception.ts'
-import {parse, inject} from 'npm://regexparam@2.0.1'
+import { IncomingMessage, ServerResponse } from "http"
+import { Stream } from "stream"
+import * as async from '../util/async.ts'
+import { AsyncEventEmitter } from "../async/events.ts"
+import qs from 'npm://qs@6.10.3'
+import safeJsonStringify from 'npm://safe-json-stringify@1.2.0'
+import Exception from '../util/exception.ts'
+import { Socket } from "net"
+import Zlib from 'zlib'
 
 
-export interface RouterHttpListener{
-	(context: HttpContext) : void
+// default parsers
+import {BufferParser} from "./parsers/buffer.ts"
+import {TextParser} from "./parsers/text.ts"
+import {JsonParser} from "./parsers/json"
+
+export interface HttpContext{
+	request: Request 
+	socket?: Socket
+	head?: any
+	reply?: Reply
+	error?: any
 }
 
-export interface AddMethod{
-	(route: string, ...fns: Array<any>) : void
-}
-
-export class Trouter {
-	routes = []
-
-	all: AddMethod
-	get: AddMethod
-	head: AddMethod
-	patch: AddMethod
-	options: AddMethod
-	connect: AddMethod
-	delete: AddMethod
-	trace: AddMethod
-	post: AddMethod
-	put: AddMethod
 
 
-	constructor() {
-		this.all = this.add.bind(this, '');
-		this.get = this.add.bind(this, 'GET');
-		this.head = this.add.bind(this, 'HEAD');
-		this.patch = this.add.bind(this, 'PATCH');
-		this.options = this.add.bind(this, 'OPTIONS');
-		this.connect = this.add.bind(this, 'CONNECT');
-		this.delete = this.add.bind(this, 'DELETE');
-		this.trace = this.add.bind(this, 'TRACE');
-		this.post = this.add.bind(this, 'POST');
-		this.put = this.add.bind(this, 'PUT');
+export class RequestBody{
+	#req: Request
+	constructor(request: Request){
+		this.#req = request
 	}
 
-	use(route, ...fns) {
-		let handlers = [].concat.apply([], fns);
-		let { keys, pattern } = parse(route, true);
-		this.routes.push({ keys, pattern, method:'', handlers });
-		return this;
+	async buffer(){
+		return await BufferParser.parse(this.#req)
 	}
 
-	add(method, route, ...fns) {
-		let { keys, pattern } = parse(route);
-		let handlers = [].concat.apply([], fns);
-		this.routes.push({ keys, pattern, method, handlers });
-		return this;
+	async text(){
+		let parser = this.#req.server.bodyParsers.get("text/plain") || TextParser
+		return await parser.parse(this.#req)
 	}
 
-	find(method, url) {
-		let isHEAD=(method === 'HEAD');
-		let i=0, j=0, k, tmp, arr=this.routes;
-		let matches: any = [], params={}, handlers=[];
-		for (; i < arr.length; i++) {
-			tmp = arr[i];
-			if (tmp.method.length === 0 || tmp.method === method || isHEAD && tmp.method === 'GET') {
-				if (tmp.keys === false) {
-					matches = tmp.pattern.exec(url);
-					if (matches === null) continue;
-					if (matches.groups !== void 0) for (k in matches.groups) params[k]=matches.groups[k];
-					tmp.handlers.length > 1 ? (handlers=handlers.concat(tmp.handlers)) : handlers.push(tmp.handlers[0]);
-				} else if (tmp.keys.length > 0) {
-					matches = tmp.pattern.exec(url);
-					if (matches === null) continue;
-					for (j=0; j < tmp.keys.length;) params[tmp.keys[j]]=matches[++j];
-					tmp.handlers.length > 1 ? (handlers=handlers.concat(tmp.handlers)) : handlers.push(tmp.handlers[0]);
-				} else if (tmp.pattern.test(url)) {
-					tmp.handlers.length > 1 ? (handlers=handlers.concat(tmp.handlers)) : handlers.push(tmp.handlers[0]);
-				}
-			} // else not a match
+	async json(){
+		let parser = this.#req.server.bodyParsers.get("application/json")|| JsonParser
+		return await parser.parse(this.#req)
+	}
+
+	async tryParse(){
+		let type = this.#req.headers["content-type"] || ''
+		if(!type){
+			return {
+				type: '',
+				data: {},
+				available: true
+			}
 		}
 
-		return { params, handlers };
+		type = type.split(";")[0]
+		type = type || "application/octect-stream"
+		let parser = this.#req.server.bodyParsers.get(type)
+		if(!parser){
+			return {
+				type,
+				data: null,
+				available: false
+			}
+		}
+		return {
+			type,
+			data: await parser.parse(this.#req),
+			available: true
+		}
+	}
+
+	async parse(){
+		let data = await this.tryParse()
+		if(!data.available){
+			throw Exception.create(`Not available parser for type: ${data.type}`).putCode("NOT_AVAILABLE_PARSER")
+		}
+		return data.data
+	}
+
+	get stream(){
+		return this.#req.stream
+	}
+
+}
+
+export class RequestUrlInfo{
+
+	#urls: Array<string>
+	constructor(urls:Array<string>){
+		this.#urls = urls
+	}
+
+	get parent(){
+		return this.#urls[this.#urls.length - 2]
+	}
+
+	get original(){
+		return this.#urls[0]
+	}
+
+	get current(){
+		return this.#urls[this.#urls.length - 1]
 	}
 }
 
 
+export class Request extends AsyncEventEmitter{
 
-export class Router{
+	#raw: IncomingMessage
+	#query = null
+	#uri: URL
+	#server: any 
+	#body: RequestBody	
 
-	#raw: Trouter
-	#internal: Trouter
+	params: {[key:string]: any}
+	data: {[key:string]: any} = {}
+	urlInfo: RequestUrlInfo
+	#urls = new Array<string>()
 
-	catchNotFound = false 
-	catchUnfinished = false
 
-	static internalMethods = [
-		"ERROR",
-		"NOTFOUND",
-		"UNFINISHED"
-	]
-
-	constructor(){
-		//this.#raw = findmyway()
-		this.#raw = new Trouter()
-		this.#internal = new Trouter()
+	constructor(raw: IncomingMessage, server: any){
+		super()
+		this.#raw = raw
+		this.urlInfo = new RequestUrlInfo(this.#urls)
+		this.$pushUrl(raw.url)		
+		this.#server = server
+		//this.urlInfo.current = raw.url
 	}
 
 	get raw(){
 		return this.#raw
 	}
 
-	attachToServer(server: Server){
-		server.on("request", this.lookup.bind(this))
+	get server(){
+		return this.#server
 	}
 
-	attachToRouter(path: string, router: Router){
-		return router.use(path, (context) => {
-			let url = context.request.url.substring(path.length)
-			context.request.$seturl(url)
-			return this.lookup(context) 
-		})
+	get query(){
+		if(!this.#query){
+			
+			let search = this.uri.search
+			if(search.startsWith("?")) search = search.substring(1)
+			this.#query = qs.parse(search)
+		}
+		return this.#query
 	}
 
-	#NotFound(context: HttpContext){
-		let json = {
-			message: "Page not found",
-			code: "ERROR404"
+	get stream(){
+		// get correct stream
+		let encoding = this.#raw.headers["content-encoding"]
+		if(encoding =="gzip"){
+			let st = Zlib.createGunzip()
+			this.#raw.pipe(st)
+			this.#raw.on("error", function(){})
+			return st 				
 		}
-		context.reply.code(404).header("content-type","application/json;charset=utf8")
-		context.reply.send(json)
+
+		if(encoding =="brotli"){
+			let st = Zlib.createBrotliDecompress()
+			this.#raw.pipe(st)
+			this.#raw.on("error", function(){})
+			return st 				
+		}
+
+		return this.#raw
 	}
 
-	#Error(context: HttpContext){
-		let json = {
-			error: {
-				message: context.error.message || String(context.error),
-				code: context.error.code || context.error.type || "Unknown",
-				stack: context.error.stack
-			}
+	get body(){
+		if(!this.#body){
+			this.#body = new RequestBody(this)
 		}
-		
-		context.reply.code(500).header("content-type","application/json;charset=utf8")
-		context.reply.send(json)
-		console.info("Status code:", context.reply.raw.statusCode)
+		return this.#body
 	}
 
+	get headers(){
+		return this.#raw.headers
+	}
+	/*
+	get id(){
+		return this.#raw.id
+	}*/
 
-	async lookup(context: HttpContext){
-		if(await this.$lookup(context) === false){
-			if(this.catchNotFound){
-				return await this.$lookup(context, "NOTFOUND")
-			}
-		}		
-		if(context.reply){
-			if((!context.reply.raw.writableEnded) && this.catchUnfinished){
-				return await this.$lookup(context, "UNFINISHED")
-			}
-		}
+	get ip(){
+		return this.#raw.socket.remoteAddress
 	}
 
-	async $lookup(context: HttpContext, method = null, url = null){
-
-		if(!method) method = context.request.method 
-		let obj:any = {}
-		if(Router.internalMethods.indexOf(method) >= 0){
-			obj = this.#internal.find(method, url || context.request.uri.pathname)
-			if(!obj.handlers.length){
-				let func = null 
-				if(method == "ERROR") func = this.#Error.bind(this)
-				else func = this.#NotFound.bind(this)
-				obj.handlers.push(func)
-			}
-		}
-		else{
-			obj = this.#raw.find(method, url || context.request.uri.pathname)
-		}
-		
-		context.request.params = obj.params
-		if(!obj.handlers.length) return false 
-		
-		let ourl = context.request.uri.pathname	
-		for(let fn of obj.handlers){
-			try{
-				await fn(context)
-				if(context.reply?.raw?.writableEnded) break 
-			}catch(e){
-				console.error("> kwruntime/http server ERROR:", e.message)
-				if(method != "ERROR"){
-					context.error = e 
-					if(!context.reply?.raw?.writableEnded){
-						await this.$lookup(context, "ERROR", ourl)
-					}
-				}
-			}
-		}
-
-
+	get ips(){
+		let forw = this.headers["x-forwarded-for"]
+		let ip = this.ip 
+		let ips = []
+		if(ip) ips.push(ip)
+		if(forw) ips.push(forw)
+		return ips
 	}
 
-	on(method: string, path: string, listener: RouterHttpListener){
+	get hostname(){
+		return this.headers["x-forwarded-host"] || this.headers["host"]
+	}
 
-		
-		if(method == "ALL"){
-			this.#raw.all(path, listener)
-		}
-		else if(method == "USE"){
-			this.#raw.use(path, listener)
-		}
-		else{
-			if(Router.internalMethods.indexOf(method) >= 0){
-				this.#internal.add(method, path, listener)
-				return this
-			}
+	get protocol(){
+		return "http"
+	}
 
-			this.#raw.add(method, path, listener)
+	get method(){
+		return this.#raw.method
+	}
+
+	get socket(){
+		return this.#raw.socket
+	}
+
+	get uri(){
+		if(!this.#uri){
+			let addr = this.#server.address
+			if(addr.port){
+				this.#uri = new URL(`http://${addr.address}:${addr.port}${this.url}`)
+			}else{
+				this.#uri = new URL(`http://127.0.0.1:0${this.urlInfo.current}`)
+			}			
+		}
+		return this.#uri
+	}
+
+	get url(){
+		return this.#raw.url
+	}
+
+	private $seturl(url: string){
+		this.$pushUrl(url)
+	}
+
+	$pushUrl(url: string){
+		this.#urls.push(url)
+		this.#raw.url = url 
+		this.#uri = null
+	}
+
+	$popUrl(){
+		this.#urls.pop()
+		this.#raw.url = this.#urls[this.#urls.length - 1]
+		this.#uri = null
+	}
+	
+	
+}
+
+export class Reply extends AsyncEventEmitter{
+	#raw: ServerResponse
+	#headers = new Map<string, any>()
+	#statusCode = 200
+	#sent = false
+	#headSent = false
+	#type = ''
+	#server: any
+
+
+	constructor(raw: ServerResponse, server?: any){
+		super()
+		this.#raw = raw
+		this.#raw.on("error", (e) => this.emit("error", e))
+		this.#raw.on("finish", () => this.emit("sent"))
+		this.#server = server
+	}
+
+	get server(){
+		return this.#server
+	}
+
+	code(statusCode: number){
+		this.#statusCode = statusCode
+		return this 
+	}
+
+	header(key: string, value: any){
+		this.#headers.set(key, value)
+		if(this.#headSent){
+			this.#raw.setHeader(key, value)
+		}
+		if(key == "content-type"){
+			this.#type = value
 		}
 		return this 
 	}
 
-	get(path: string, listener: RouterHttpListener){
-		return this.on("GET", path, listener)
-	}
-
-	all(path: string, listener: RouterHttpListener){
-		return this.on("ALL", path, listener)
-	}
-
-	copy(path: string, listener: RouterHttpListener){
-		return this.on("COPY", path, listener)
-	}
-
-	delete(path: string, listener: RouterHttpListener){
-		return this.on("COPY", path, listener)
-	}
-
-	head(path: string, listener: RouterHttpListener){
-		return this.on("HEAD", path, listener)
-	}
-
-	link(path: string, listener: RouterHttpListener){
-		return this.on("LINK", path, listener)
-	}
-
-	lock(path: string, listener: RouterHttpListener){
-		return this.on("LOCK", path, listener)
-	}
-
-	merge(path: string, listener: RouterHttpListener){
-		return this.on("MERGE", path, listener)
-	}
-
-	move(path: string, listener: RouterHttpListener){
-		return this.on("MOVE", path, listener)
-	}
-
-	notify(path: string, listener: RouterHttpListener){
-		return this.on("NOTIFY", path, listener)
-	}
-
-	options(path: string, listener: RouterHttpListener){
-		return this.on("OPTIONS", path, listener)
-	}
-
-	patch(path: string, listener: RouterHttpListener){		
-		return this.on("PATCH", path, listener)
-	}
-
-
-	post(path: string, listener: RouterHttpListener){
-		return this.on("POST", path, listener)
-	}
-
-	purge(path: string, listener: RouterHttpListener){
-		return this.on("PURGE", path, listener)
-	}
-
-	put(path: string, listener: RouterHttpListener){
-		return this.on("PUT", path, listener)
-	}
-
-	rebind(path: string, listener: RouterHttpListener){
-		return this.on("REBIND", path, listener)
-	}
-
-	report(path: string, listener: RouterHttpListener){
-		return this.on("REPORT", path, listener)
-	}
-
-	search(path: string, listener: RouterHttpListener){
-		return this.on("SEARCH", path, listener)
-	}
-
-	source(path: string, listener: RouterHttpListener){
-		return this.on("SOURCE", path, listener)
-	}
-
-	subscribe(path: string, listener: RouterHttpListener){
-		return this.on("SUBSCRIBE", path, listener)
-	}
-
-	trace(path: string, listener: RouterHttpListener){
-		return this.on("TRACE", path, listener)
-	}
-
-	unlink(path: string, listener: RouterHttpListener){
-		return this.on("UNLINK", path, listener)
-	}
-
-	unlock(path: string, listener: RouterHttpListener){
-		return this.on("UNLOCK", path, listener)
-	}
-
-	unsubscribe(path: string, listener: RouterHttpListener){
-		return this.on("UNSUBSCRIBE", path, listener)
-	}
-
-	use(path: string, listener: RouterHttpListener | Router){
-		if(path.indexOf("*") >= 0){
-			throw Exception.create("Route for 'use' method cannot contain *").putCode("INVALID_ROUTE")
+	headers(object: {[key: string]: any}){
+		for(let key in object){
+			this.header(key, object[key])
 		}
-		let cPath = path + "/*"
-		// change URL in request
-		const realHandler = async (context: HttpContext) => {
-			let path = context.request.params.wild
-			delete context.request.params.wild
-			if(path[0] != "/") path = "/" + path
-			context.request.$pushUrl(path)
+		return this
+	}
 
-			try{
-				let route = listener as Router
-				if(typeof route.lookup == "function"){
-					return await route.lookup(context)
-				}
-				else{
-					return await (listener as RouterHttpListener)(context)
-				}
-			}catch(e){
-				throw e
-			}
-			finally{
-				context.request.$popUrl()
-			}
+	getHeader(key: string){
+		return this.#headers.get(key)
+	}
+
+	getHeaders(){
+		return this.#headers
+	}
+
+	removeHeader(key: string){
+		this.#headers.delete(key)
+		return this
+	}
+
+	hasHeader(key: string){
+		return this.#headers.has(key)
+	}
+
+	redirect(href: string, code: number = 302){
+		this.code(code).header("location", href)
+		return this
+	}
+
+	type(contentType: string){
+		this.#type = contentType
+		this.header("content-type", contentType)
+		return this
+	}
+
+	get sent(){
+		return this.#sent || this.#raw.writableEnded
+	}
+
+	#sendHead(){
+		if(this.#raw.headersSent) return 
+		
+		this.#raw.statusCode = this.#statusCode
+		let keys = this.#headers.keys()
+		for(let key of keys){
+			this.#raw.setHeader(key, this.#headers.get(key))
 		}
-		return this.#raw.all(cPath, realHandler)
+		this.#headSent = true
+		this.emit("headSent")
 	}
 
-	off(method: string, listener: RouterHttpListener){
+	get raw(){
+		return this.#raw
+	}
 
-		/*let listens = this.#listeners.get(String(method))
-		if(listens){
-			let func = listens.get(listener)
-			if(func){
-				this.#raw.off(method, func)
-				listens.delete(listener)
+	async send(data: any){
+		if(!this.#raw.writable || this.#raw.writableEnded) return 
+
+
+		if(!this.#headSent){
+			this.#sendHead()
+		}
+		if(data instanceof Promise){
+			data = await data 
+		}
+		if(data instanceof Stream){
+			let def = new async.Deferred<void>()
+			data.pipe(this.#raw)
+			this.#raw.once("error", def.reject)
+			this.#raw.once("finish", def.resolve)
+			data.once("error", def.reject)
+			await def.promise
+		}
+		else{
+			if(typeof data == "string"){
+				data = Buffer.from(data)
 			}
-		}*/
-		throw Exception.create("Not implemented method").putCode("NOT_IMPLEMENTED")
-		
-		
+			if(Buffer.isBuffer(data)){
+				if(!this.#type){
+					this.type("text/plain;charset=utf8")
+				}
+				this.#raw.end(data)
+			}
+			else if(typeof data == "number"){
+				if(!this.#type){
+					this.type("application/json;charset=utf8")
+				}
+				this.#raw.end(String(data))
+			}
+			else{
+				let str = safeJsonStringify(data)
+				if(!this.#type){
+					this.type("application/json;charset=utf8")
+				}
+				this.#raw.end(str)
+			}			
+		}
 	}
-
-
 
 
 }
