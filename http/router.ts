@@ -1,11 +1,88 @@
-import Trouter,{Methods} from 'npm://trouter@3.2.0'
+//import Trouter,{Methods} from 'npm://trouter@3.2.0'
 import { Server } from './server.ts'
 import {HttpContext} from './context.ts'
 import {Exception} from '../util/exception.ts'
+import {parse, inject} from 'npm://regexparam@2.0.1'
+
 
 export interface RouterHttpListener{
 	(context: HttpContext) : void
 }
+
+export interface AddMethod{
+	(route: string, ...fns: Array<any>) : void
+}
+
+export class Trouter {
+	routes = []
+
+	all: AddMethod
+	get: AddMethod
+	head: AddMethod
+	patch: AddMethod
+	options: AddMethod
+	connect: AddMethod
+	delete: AddMethod
+	trace: AddMethod
+	post: AddMethod
+	put: AddMethod
+
+
+	constructor() {
+		this.all = this.add.bind(this, '');
+		this.get = this.add.bind(this, 'GET');
+		this.head = this.add.bind(this, 'HEAD');
+		this.patch = this.add.bind(this, 'PATCH');
+		this.options = this.add.bind(this, 'OPTIONS');
+		this.connect = this.add.bind(this, 'CONNECT');
+		this.delete = this.add.bind(this, 'DELETE');
+		this.trace = this.add.bind(this, 'TRACE');
+		this.post = this.add.bind(this, 'POST');
+		this.put = this.add.bind(this, 'PUT');
+	}
+
+	use(route, ...fns) {
+		let handlers = [].concat.apply([], fns);
+		let { keys, pattern } = parse(route, true);
+		this.routes.push({ keys, pattern, method:'', handlers });
+		return this;
+	}
+
+	add(method, route, ...fns) {
+		let { keys, pattern } = parse(route);
+		let handlers = [].concat.apply([], fns);
+		this.routes.push({ keys, pattern, method, handlers });
+		return this;
+	}
+
+	find(method, url) {
+		let isHEAD=(method === 'HEAD');
+		let i=0, j=0, k, tmp, arr=this.routes;
+		let matches: any = [], params={}, handlers=[];
+		for (; i < arr.length; i++) {
+			tmp = arr[i];
+			if (tmp.method.length === 0 || tmp.method === method || isHEAD && tmp.method === 'GET') {
+				if (tmp.keys === false) {
+					matches = tmp.pattern.exec(url);
+					if (matches === null) continue;
+					if (matches.groups !== void 0) for (k in matches.groups) params[k]=matches.groups[k];
+					tmp.handlers.length > 1 ? (handlers=handlers.concat(tmp.handlers)) : handlers.push(tmp.handlers[0]);
+				} else if (tmp.keys.length > 0) {
+					matches = tmp.pattern.exec(url);
+					if (matches === null) continue;
+					for (j=0; j < tmp.keys.length;) params[tmp.keys[j]]=matches[++j];
+					tmp.handlers.length > 1 ? (handlers=handlers.concat(tmp.handlers)) : handlers.push(tmp.handlers[0]);
+				} else if (tmp.pattern.test(url)) {
+					tmp.handlers.length > 1 ? (handlers=handlers.concat(tmp.handlers)) : handlers.push(tmp.handlers[0]);
+				}
+			} // else not a match
+		}
+
+		return { params, handlers };
+	}
+}
+
+
 
 export class Router{
 
@@ -82,7 +159,7 @@ export class Router{
 
 	async $lookup(context: HttpContext, method = null, url = null){
 
-		if(!method) method = context.request.method as Methods
+		if(!method) method = context.request.method 
 		let obj:any = {}
 		if(Router.internalMethods.indexOf(method) >= 0){
 			obj = this.#internal.find(method, url || context.request.uri.pathname)
@@ -119,7 +196,7 @@ export class Router{
 
 	}
 
-	on(method: Methods | "ALL" | "USE", path: string, listener: RouterHttpListener){
+	on(method: string, path: string, listener: RouterHttpListener){
 
 		
 		if(method == "ALL"){
@@ -236,26 +313,37 @@ export class Router{
 		return this.on("UNSUBSCRIBE", path, listener)
 	}
 
-	use(path: string, listener: RouterHttpListener | Router){		
+	use(path: string, listener: RouterHttpListener | Router){
+		if(path.indexOf("*") >= 0){
+			throw Exception.create("Route for 'use' method cannot contain *").putCode("INVALID_ROUTE")
+		}
+		let cPath = path + "/*"
 		// change URL in request
-		const realHandler = (context: HttpContext) => {
-			context.request.urlInfo.parent = context.request.url
-			context.request["$seturl"](context.request.url.substring(path.length))
-			//console.info("new url:",context.request.url)
-			let route = listener as Router
-			if(typeof route.lookup == "function"){
-				return route.lookup(context)
+		const realHandler = async (context: HttpContext) => {
+			let path = context.request.params.wild
+			delete context.request.params.wild
+			if(path[0] != "/") path = "/" + path
+			context.request.$pushUrl(path)
+
+			try{
+				let route = listener as Router
+				if(typeof route.lookup == "function"){
+					return await route.lookup(context)
+				}
+				else{
+					return await (listener as RouterHttpListener)(context)
+				}
+			}catch(e){
+				throw e
 			}
-			else{
-				return (listener as RouterHttpListener)(context)
+			finally{
+				context.request.$popUrl()
 			}
 		}
-
-		return this.#raw.use(path, realHandler)
+		return this.#raw.all(cPath, realHandler)
 	}
 
-
-	off(method: Methods | "ALL" | "USE", listener: RouterHttpListener){
+	off(method: string, listener: RouterHttpListener){
 
 		/*let listens = this.#listeners.get(String(method))
 		if(listens){

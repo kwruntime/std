@@ -112,10 +112,24 @@ function $$$createKModule(filename?: string){
 		}
 
 		import(request){
+			
+			try{
+				let file = request 
+				if(file.startsWith("file://")){
+					file = file.substring(7)
+				}
+				if(KModuleLoader.$Files[file]){
+					return this.$require([file])
+				}
+			}catch(e){
+				
+			}
+
 			if(this.global.kawix){
 				return this.global.kawix.import.apply(this.global.kawix, arguments)
-			}			
+			}
 			throw new Error("Module: " + request + " not found")
+
 		}
 
 	}
@@ -129,8 +143,9 @@ export interface BuilderOptions{
 	target?: string 
 	minify?: any
 	esbuild?: any
+	externalModules?: Array<string>
 	npmEnv?: {[key:string]: string}
-	npmExternalModules?: string[] 
+	npmExternalModules?: Array<string>
 	excludeNpmModules?: boolean
 }
 
@@ -151,6 +166,7 @@ export class Builder{
 		}
 	}
 
+	
 
 	async compile(file: string){
 
@@ -162,6 +178,17 @@ export class Builder{
 
 		let npmModules = new Set<string>(), nodeFiles = new Set<string>(), npmFile = '', preloadCode = []
 		let addInfo = async (info: ModuleImportInfo) => {
+
+			/*
+			if(info.request == "https://gitlab.com/jamesxt94/tmux/-/raw/dcc942c7/src/v2/tmux.ts")
+				console.info("This request:", info)
+			
+			if((this.#options.externalModules|| []).indexOf(info.request) >= 0){
+				// cargar al inicio
+				return 
+			}
+			*/
+
 
 			let nstr = []
 			if(loaded[info.request]) return 
@@ -246,6 +273,43 @@ export class Builder{
 				}
 			}
 			//var [${info.vars.names.join(",")}] = arguments[0]
+
+			// get async requires 
+			let asyncRequires = [], moreModules = []
+			
+			while(true){
+				let match = info.result.code.match(/\s+asyncRequire\((\"[^\"]+\")\)/i)
+				if(!match || !match[1]) break 
+
+				let arequire = JSON.parse(match[1])
+				let custom = true 
+				if(arequire.startsWith("npm://")){
+					let npm = this.#options.npmExternalModules
+					if(npm && (npm.indexOf(arequire) >=0)){
+						custom = false
+					}
+				}
+				else if(info.request.startsWith("http:") || info.request.startsWith("https:")){
+					arequire = new URL(arequire, info.request).href
+				}
+				else if(arequire.startsWith("gh+/") || arequire.startsWith("gl+/") || arequire.startsWith("github:/") || arequire.startsWith("gitlab:/")){
+					custom = false
+				}
+				else{
+					arequire = Path.resolve(Path.dirname(info.request), arequire)
+				}
+				
+				if(custom){
+					let impInfo = await kawix.importInfo(arequire)
+					moreModules.push(impInfo)
+				}
+
+				info.result.code = info.result.code.substring(0, match.index) + " asyncRequire( " + JSON.stringify(arequire) + info.result.code.substring(match.index + 14 + match[1].length)
+				asyncRequires.push(match[1])
+				
+				
+			}
+
 			let ncode = `$$Files[${JSON.stringify(info.request)}] = function(){
 				
 				${nstr.join("\n")}
@@ -258,6 +322,14 @@ export class Builder{
 			for(let mod of info.preloadedModules){
 				if(mod.filename){
 					await addInfo(mod)
+				}
+			}
+
+			if(moreModules?.length){
+				for(let mod of moreModules){
+					if(mod.filename){
+						await addInfo(mod)
+					}
 				}
 			}
 		}
@@ -463,6 +535,7 @@ export class Builder{
 	}
 
 	get source(){
+		let result = null, asyncRequires = []
 		if(this.#options.minify){
 			let minify = null
 			if(this.#options.minify === true){
@@ -472,17 +545,20 @@ export class Builder{
 				minify = this.#options.minify
 			}
 
-			let result = esbuild.transformSync(this.#code.join("\n"), {
+			result = esbuild.transformSync(this.#code.join("\n"), {
 				minify: true,
 			})
 
+			
 			result.code = "\n//KWRUNTIME-DISABLE-TRANSPILATION\n" + result.code
-			return result
 		}
-		
-		let result = esbuild.transformSync(this.#code.join("\n"), {
-		})
-		result.code = "\n//KWRUNTIME-DISABLE-TRANSPILATION\n" + result.code
+		else{
+			result = esbuild.transformSync(this.#code.join("\n"), {
+			})
+			result.code = "\n//KWRUNTIME-DISABLE-TRANSPILATION\n" + result.code
+
+			
+		}
 		return result
 
 		

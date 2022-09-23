@@ -213,13 +213,13 @@ export class Packager{
 				name = Path.basename(file)
 			}
 		}
+
 		let builder = new Builder(Object.assign({
 			target: 'node'
 		}, this.#options.buildOptions || {}))
 		await builder.compile(file)
 		let code = builder.source.code
 		
-
 		let compression = this.#options.compression?.type || "brotli"
 		let buffer: Buffer
 		if(compression == "brotli"){

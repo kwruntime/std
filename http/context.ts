@@ -86,9 +86,23 @@ export class RequestBody{
 }
 
 export class RequestUrlInfo{
-	current: string 
-	parent: string 
-	original: string 
+
+	#urls: Array<string>
+	constructor(urls:Array<string>){
+		this.#urls = urls
+	}
+
+	get parent(){
+		return this.#urls[this.#urls.length - 2]
+	}
+
+	get original(){
+		return this.#urls[0]
+	}
+
+	get current(){
+		return this.#urls[this.#urls.length - 1]
+	}
 }
 
 
@@ -102,14 +116,17 @@ export class Request extends AsyncEventEmitter{
 
 	params: {[key:string]: any}
 	data: {[key:string]: any} = {}
-	urlInfo = new RequestUrlInfo()
+	urlInfo: RequestUrlInfo
+	#urls = new Array<string>()
 
 
 	constructor(raw: IncomingMessage, server: any){
 		super()
+		this.$pushUrl(raw.url)
+		this.urlInfo = new RequestUrlInfo(this.#urls)
 		this.#raw = raw
 		this.#server = server
-		this.urlInfo.current = raw.url
+		//this.urlInfo.current = raw.url
 	}
 
 	get raw(){
@@ -200,7 +217,7 @@ export class Request extends AsyncEventEmitter{
 			if(addr.port){
 				this.#uri = new URL(`http://${addr.address}:${addr.port}${this.url}`)
 			}else{
-				this.#uri = new URL(`http://127.0.0.1:0${this.url}`)
+				this.#uri = new URL(`http://127.0.0.1:0${this.urlInfo.current}`)
 			}			
 		}
 		return this.#uri
@@ -211,11 +228,21 @@ export class Request extends AsyncEventEmitter{
 	}
 
 	private $seturl(url: string){
-		this.#raw.url = url 
-		this.#uri = null 
-		this.urlInfo.current = url
+		this.$pushUrl(url)
 	}
 
+	$pushUrl(url: string){
+		this.#urls.push(url)
+		this.#raw.url = url 
+		this.#uri = null
+	}
+
+	$popUrl(){
+		this.#urls.pop()
+		this.#raw.url = this.#urls[this.#urls.length - 1]
+		this.#uri = null
+	}
+	
 	
 }
 
