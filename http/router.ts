@@ -109,7 +109,6 @@ export class Trouter {
 		let matches: any = [], params={}, handlers=[];
 		for (; i < arr.length; i++) {
 			tmp = arr[i];
-			console.info("Tmp:", tmp)
 			if (tmp.method.length === 0 || tmp.method === method || isHEAD && tmp.method === 'GET') {
 				if (tmp.keys === false) {
 					matches = tmp.pattern.exec(url);
@@ -189,7 +188,6 @@ export class Router{
 		
 		context.reply.code(500).header("content-type","application/json;charset=utf8")
 		context.reply.send(json)
-		console.info("Status code:", context.reply.raw.statusCode)
 	}
 
 
@@ -230,7 +228,6 @@ export class Router{
 		if(!results.length) return false 
 		
 		let ourl = context.request.uri.pathname	
-		console.info("Lookup result:", results)
 		for(let result of results){
 			context.request.params = result.params
 
@@ -380,8 +377,7 @@ export class Router{
 		let wild = ''
 		// change URL in request
 		const realHandler = async (context: HttpContext) => {
-			console.info("Cpath", cPath, context.request.params.wild)
-			let path = context.request.params.wild
+			let path = context.request.params.wild || ''
 			//delete context.request.params.wild
 
 			if(path[0] != "/") path = "/" + path
@@ -403,7 +399,8 @@ export class Router{
 				context.request.$popUrl()
 			}
 		}
-		return this.#raw.all(cPath, realHandler)
+		this.#raw.all(cPath, realHandler)
+		this.#raw.all(path, realHandler)
 	}
 
 	off(method: string, listener: RouterHttpListener){
