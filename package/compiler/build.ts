@@ -183,12 +183,15 @@ export class Builder{
 			if(info.request == "https://gitlab.com/jamesxt94/tmux/-/raw/dcc942c7/src/v2/tmux.ts")
 				console.info("This request:", info)
 			
+			
+			
+
 			if((this.#options.externalModules|| []).indexOf(info.request) >= 0){
 				// cargar al inicio
 				return 
 			}
+			
 			*/
-
 
 			let nstr = []
 			if(loaded[info.request]) return 
