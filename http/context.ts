@@ -139,10 +139,14 @@ export class Request extends AsyncEventEmitter{
 
 	get query(){
 		if(!this.#query){
-			
-			let search = this.uri.search
-			if(search.startsWith("?")) search = search.substring(1)
-			this.#query = qs.parse(search)
+			let url = this.#urls[0]
+			let i = url.indexOf("?")
+			if(i >= 0){
+				this.#query = qs.parse(url.substring(i+1))
+			}
+			else{
+				this.#query = {}
+			}
 		}
 		return this.#query
 	}

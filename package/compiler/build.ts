@@ -2,12 +2,13 @@ import Path from 'path'
 import fs from 'fs'
 import * as async from '../../util/async.ts'
 import { Writable } from 'stream'
-
+import {Exception} from '../../util/exception.ts'
 import {Registry} from '../pnpm.ts'
 import * as esbuild from 'npm://esbuild@0.14.0'
-import {kawix, ModuleImportInfo} from 'gh+/kwruntime/core@1.1.15/src/kwruntime.ts'
+import {kawix, KModule, ModuleImportInfo} from 'gh+/kwruntime/core@1.1.15/src/kwruntime.ts'
+import {Packager} from "./pack.ts"
 
-function $$$createKModule(filename?: string){	
+function $$$createKModule(filename?: string, extensions?: Array<string>){	
 
 	let globalFilename = filename
 
@@ -59,34 +60,59 @@ function $$$createKModule(filename?: string){
 				filedata = filedata()
 			}
 			//console.info(filedata.content && filedata.content.toString())
-			//this.$Files[Path.posix.join("/virtual", path), filedata)
+			//KModuleLoader.$Files[Path.posix.join("/virtual", path)]= filedata
 		}
 
 		require(){
 			return this.$require(arguments)
 		}
+
+		$customImportInfo(request, module){
+			let func = KModuleLoader.$Files[request]
+			if(typeof func == "function"){
+				let self = this 
+				let load = function(){
+					if(!module) module = new Module(request)
+					let params = {
+						global: self.global,
+						Buffer: self.global.Buffer,
+						module,
+						exports: module.exports,
+						KModule: new KModuleLoader(request), 
+						require: self.require.bind(self),
+						asyncRequire: self.import.bind(self)
+					}
+					func(params)
+					KModuleLoader.$cache[request] = module
+					return KModuleLoader.$cache[request].exports
+				}
+				
+				return {
+					mode: "custom",
+					load
+				}
+			}
+		}
+
+
+
 		$require(originalArgs, module?){
 			let request = originalArgs[0]
 			if(KModuleLoader.$cache[request]){
 				return KModuleLoader.$cache[request].exports 
 			}
 
-			let func = KModuleLoader.$Files[request]
-			if(typeof func == "function"){
-				if(!module) module = new Module(request)
-				let params = {
-					global: this.global,
-					Buffer: this.global.Buffer,
-					module,
-					exports: module.exports,
-					KModule: new KModuleLoader(request), // this.global.kawix ? this.global.kawix.KModule : this,
-					require: this.require.bind(this),
-					asyncRequire: this.import.bind(this)
+			if(KModuleLoader.$Files[request]){
+				let info = this.$customImportInfo(request, module)
+				if(info && info.load){
+					try{
+						return info.load()
+					}catch(e){
+						console.error("[packed] Failed to load packed module:", request, e)
+					}
 				}
-				func(params)
-				KModuleLoader.$cache[request] = module
-				return KModuleLoader.$cache[request].exports
 			}
+			
 
 			try{
 				return require(request)
@@ -134,7 +160,24 @@ function $$$createKModule(filename?: string){
 
 	}
 
-	return new KModuleLoader(filename)
+	var loader= new KModuleLoader(filename)
+	if(loader.global.kawix && loader.global.kawix.customImportInfo){
+		loader.global.kawix.customImportInfo.push(function(request){
+			//console.info("Custom importer:", request)
+
+			let res = loader.$customImportInfo(request, null)
+			let exts = [].concat(extensions)
+			while(res === undefined){
+				let ext = exts.shift()
+				if(!ext) break 
+
+				res = loader.$customImportInfo(request + ext, null)
+			}
+			return res 
+		})
+	}
+
+	return loader 
 }
 
 
@@ -147,6 +190,7 @@ export interface BuilderOptions{
 	npmEnv?: {[key:string]: string}
 	npmExternalModules?: Array<string>
 	excludeNpmModules?: boolean
+	packager?: Packager
 }
 
 export class Builder{
@@ -175,10 +219,14 @@ export class Builder{
 		//this.#code.push("// ESBUILD PACKAGE")
 		this.#code.push("var $$Files= {}, $$NPMRequires=null, $$NodeRequire = null, $$filename = null; try{ $$NodeRequire = require; }catch(e){}; try{ $$filename = __filename; }catch(e){}")
 
-
+		let kwbModules : Array<string>
+		let kwbModulesSet = new Set<string>()
 		let npmModules = new Set<string>(), nodeFiles = new Set<string>(), npmFile = '', preloadCode = []
 		let addInfo = async (info: ModuleImportInfo) => {
 
+			if(info.request.endsWith(".kwb"))
+				return 
+			
 			/*
 			if(info.request == "https://gitlab.com/jamesxt94/tmux/-/raw/dcc942c7/src/v2/tmux.ts")
 				console.info("This request:", info)
@@ -193,335 +241,394 @@ export class Builder{
 			
 			*/
 
-			let nstr = []
-			if(loaded[info.request]) return 
-			
-			
-			loaded[info.request] = true
-			nstr.push("var $$modParams = arguments[0]")
-			for(let i=0;i<info.vars.names.length;i++){
-				let name = info.vars.names[i]
-				if(name == "module"){
-					nstr.push("var module = $$modParams['module']")
-				}
-				else if(name == "require"){
-					nstr.push("var require = $$modParams['require']")
-				}
-				else if(name == "KModule"){
-					nstr.push("var KModule = $$modParams['KModule']")
-				}
-				else if(name == "global"){
-					nstr.push("var global = $$modParams['global']")
-				}
-				else if(name == "Buffer"){
-					nstr.push("var Buffer = $$modParams['Buffer']")
-				}
-				else if(name == "exports"){
-					nstr.push(`var exports = $$modParams['exports']`)
-				}
-				else if(name == "asyncRequire"){
-					nstr.push(`var asyncRequire = $$modParams['asyncRequire']`)
-				}
-				else if(name == "preloadedModules"){
-					nstr.push(`var preloadedModules = []`)
-				}
-				else if(name == "__dirname" || name == "__filename"){
-					if(this.#options.target != "node"){
+
+			try{
+				let nstr = []
+				if(loaded[info.request]) return 
+				
+				
+				loaded[info.request] = true
+				nstr.push("var $$modParams = arguments[0]")
+				for(let i=0;i<info.vars.names.length;i++){
+					let name = info.vars.names[i]
+					if(name == "module"){
+						nstr.push("var module = $$modParams['module']")
+					}
+					else if(name == "require"){
+						nstr.push("var require = $$modParams['require']")
+					}
+					else if(name == "KModule"){
+						nstr.push("var KModule = $$modParams['KModule']")
+					}
+					else if(name == "global"){
+						nstr.push("var global = $$modParams['global']")
+					}
+					else if(name == "Buffer"){
+						nstr.push("var Buffer = $$modParams['Buffer']")
+					}
+					else if(name == "exports"){
+						nstr.push(`var exports = $$modParams['exports']`)
+					}
+					else if(name == "asyncRequire"){
+						nstr.push(`var asyncRequire = $$modParams['asyncRequire']`)
+					}
+					else if(name == "preloadedModules"){
+						nstr.push(`var preloadedModules = []`)
+					}
+					else if(name == "__dirname" || name == "__filename"){
+						if(this.#options.target != "node"){
+							nstr.push(`var ${name} = ${JSON.stringify(info.vars.values[i])}`)
+						}
+					}
+					else{
 						nstr.push(`var ${name} = ${JSON.stringify(info.vars.values[i])}`)
 					}
 				}
-				else{
-					nstr.push(`var ${name} = ${JSON.stringify(info.vars.values[i])}`)
-				}
-			}
-			nstr.push("if($$NodeRequire) require = $$NodeRequire;")
-	
-			for(let i=0;i< info.preloadedModules.length;i++){
-				let mod = info.preloadedModules[i]
-				if(mod.builtin){
-					let modtext = info.requires[i]
-					if(this.#options.target != "node"){
-						let replace = nodeTranslations[modtext]
-						if(replace){
-							let replaceInfo = await kawix.importInfo(replace)
+				nstr.push("if($$NodeRequire) require = $$NodeRequire;")
+				
+				for(let i=0;i< info.preloadedModules.length;i++){
+					let mod = info.preloadedModules[i]
+					
+					if(mod.builtin){
+						let modtext = info.requires[i]
+						if(this.#options.target != "node"){
+							let replace = nodeTranslations[modtext]
+							if(replace){
+								let replaceInfo = await kawix.importInfo(replace)
+								await addInfo(replaceInfo)
+								modtext = replace
+							}
+						}
+						nstr.push(`preloadedModules[${i}] = KModule.re${"q"}uire(${JSON.stringify(modtext)})`)
+					}
+					else if(mod.request){
+						if(mod.request.startsWith("npm://")){
+							/*
+							let ureq = "https://esm.sh/" + mod.request.substring(6)
+							let replaceInfo = await global.kawix.importInfo(ureq)
 							await addInfo(replaceInfo)
-							modtext = replace
+							*/
+							let name = mod.request.substring(6)
+							npmModules.add(name)
+							nstr.push(`preloadedModules[${i}] = $$NPMRequires[${JSON.stringify(name)}]`)				
+							
+						}
+						else if(mod.request.endsWith(".kwb")){
+							if(this.#options.packager){
+								//console.info("Aquí packager...")
+								let name = "./" + Path.basename(mod.filename)
+								await this.#options.packager.add([mod.filename], Path.dirname(mod.filename))
+								//nstr.push(`preloadedModules[${i}] = $$NodeRequire($$NodeRequire('path').join(__dirname, ${JSON.stringify(name)}))`)
+
+								kwbModulesSet.add(name)
+								nstr.push(`preloadedModules[${i}] = $$NPMRequires[${JSON.stringify(name)}]`)		
+
+							}
+							else{
+								kwbModulesSet.add(mod.request)
+								nstr.push(`preloadedModules[${i}] = $$NPMRequires[${JSON.stringify(mod.request)}]`)				
+							}
+							
+						}
+						else if(/kwruntime\/core(\@[0-9\.A-Za-z]+)?\/src\/kwruntime(\.ts)?$/.test(mod.request)){
+							// Internal module
+							nstr.push(`preloadedModules[${i}] = {KModule:KModule, kawix: KModule.global.kawix || KModule}`)
+						}
+						else{
+							nstr.push(`preloadedModules[${i}] = KModule.require(${JSON.stringify(mod.request)})`)
 						}
 					}
-					nstr.push(`preloadedModules[${i}] = KModule.re${"q"}uire(${JSON.stringify(modtext)})`)
-				}
-				else if(mod.request){
-					if(mod.request.startsWith("npm://")){
-						/*
-						let ureq = "https://esm.sh/" + mod.request.substring(6)
-						let replaceInfo = await global.kawix.importInfo(ureq)
-						await addInfo(replaceInfo)
-						*/
-						let name = mod.request.substring(6)
-						npmModules.add(name)
-						nstr.push(`preloadedModules[${i}] = $$NPMRequires[${JSON.stringify(name)}]`)				
-						
+					else if(mod.mode == "node"){
+						nstr.push(`preloadedModules[${i}] = $$NPMRequires[${JSON.stringify(mod.location.main)}]`)
+						nodeFiles.add(mod.location.main)
 					}
-					else if(/kwruntime\/core(\@[0-9\.A-Za-z]+)?\/src\/kwruntime(\.ts)?$/.test(mod.request)){
-						// Internal module
-						nstr.push(`preloadedModules[${i}] = {KModule:KModule, kawix: KModule.global.kawix || KModule}`)
-					}
-					else{
-						nstr.push(`preloadedModules[${i}] = KModule.require(${JSON.stringify(mod.request)})`)
-					}
-				}
-				else if(mod.mode == "node"){
-					nstr.push(`preloadedModules[${i}] = $$NPMRequires[${JSON.stringify(mod.location.main)}]`)
-					nodeFiles.add(mod.location.main)
-				}
-			}
-			//var [${info.vars.names.join(",")}] = arguments[0]
+				}	
+				//var [${info.vars.names.join(",")}] = arguments[0]
 
-			// get async requires 
-			let asyncRequires = [], moreModules = []
-			
-			while(true){
-				let match = info.result.code.match(/\s+asyncRequire\((\"[^\"]+\")\)/i)
-				if(!match || !match[1]) break 
+				// get async requires 
+				let asyncRequires = [], moreModules = []
+				
+				while(true){
+					let match = info.result.code.match(/\s+asyncRequire\((\"[^\"]+\")\)/i)
+					if(!match || !match[1]) break 
 
-				let arequire = JSON.parse(match[1])
-				let custom = true 
-				if(arequire.startsWith("npm://")){
-					let npm = this.#options.npmExternalModules
-					if(npm && (npm.indexOf(arequire) >=0)){
+					let arequire = JSON.parse(match[1])
+					let custom = true 
+					if(arequire.startsWith("npm://")){
+						let npm = this.#options.npmExternalModules
+						if(npm && (npm.indexOf(arequire) >=0)){
+							custom = false
+						}
+					}
+					else if(info.request.startsWith("http:") || info.request.startsWith("https:")){
+						arequire = new URL(arequire, info.request).href
+					}
+					else if(arequire.startsWith("gh+/") || arequire.startsWith("gl+/") || arequire.startsWith("github:/") || arequire.startsWith("gitlab:/")){
 						custom = false
 					}
-				}
-				else if(info.request.startsWith("http:") || info.request.startsWith("https:")){
-					arequire = new URL(arequire, info.request).href
-				}
-				else if(arequire.startsWith("gh+/") || arequire.startsWith("gl+/") || arequire.startsWith("github:/") || arequire.startsWith("gitlab:/")){
-					custom = false
-				}
-				else{
-					arequire = Path.resolve(Path.dirname(info.request), arequire)
-				}
-				
-				if(custom){
-					let impInfo = await kawix.importInfo(arequire)
-					moreModules.push(impInfo)
+					else{
+						arequire = Path.resolve(Path.dirname(info.request), arequire)
+					}
+					
+					if(custom){
+						let impInfo = await kawix.importInfo(arequire)
+						moreModules.push(impInfo)
+					}
+
+					info.result.code = info.result.code.substring(0, match.index) + " asyncRequire( " + JSON.stringify(arequire) + info.result.code.substring(match.index + 14 + match[1].length)
+					asyncRequires.push(match[1])
+					
+					
 				}
 
-				info.result.code = info.result.code.substring(0, match.index) + " asyncRequire( " + JSON.stringify(arequire) + info.result.code.substring(match.index + 14 + match[1].length)
-				asyncRequires.push(match[1])
+				let ncode = `$$Files[${JSON.stringify(info.request)}] = function(){
+					
+					${nstr.join("\n")}
+					${info.result.code}
+				};`;
+				this.#code.push(ncode)
+		
 				
-				
-			}
-
-			let ncode = `$$Files[${JSON.stringify(info.request)}] = function(){
-				
-				${nstr.join("\n")}
-				${info.result.code}
-			};`;
-			this.#code.push(ncode)
-	
-			
-	
-			for(let mod of info.preloadedModules){
-				if(mod.filename){
-					await addInfo(mod)
-				}
-			}
-
-			if(moreModules?.length){
-				for(let mod of moreModules){
+		
+				for(let mod of info.preloadedModules){
 					if(mod.filename){
 						await addInfo(mod)
 					}
 				}
+
+				if(moreModules?.length){
+					for(let mod of moreModules){
+						if(mod.filename){
+							await addInfo(mod)
+						}
+					}
+				}
+			}catch(e){
+				let ex = Exception.create(`Compilation failed '${info.request}': ${e.message}`).putCode(e.code || "COMPILATION_FAILED")
+				//ex.originalStack = e.stack 
+				ex.stack += "\n" + e.stack
+				throw ex
 			}
 		}
 
 
 		
-
-		if(this.#options.target != "node"){
-			process.env.KW_USER_AGENT= "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-		}
-		else{
-			delete process.env.KW_USER_AGENT
-		}
-		let info = await kawix.importInfo(file)
-		if(this.#options.target != "node"){
-			let bufferInfo = await kawix.importInfo(Builder.nodeTranslations.buffer)
-			await addInfo(bufferInfo)
-		}
-		await addInfo(info)
-
-		if(npmModules.size > 0){
-			let reg = new Registry()
-			let mnames = []
-			for(let name of npmModules){
-				let uri = new URL("npm://" + name)
-				let text = name 
-				let modname = (uri.username ? (uri.username + "@" + uri.host + uri.pathname) :  uri.pathname.substring(2))
-				let i = name.indexOf("@")
-				name = modname.substring(0,i)
-				let version = modname.substring(i + 1)
-				mnames.push({
-					search: uri.search,
-					searchParams: uri.searchParams,
-					modname,
-					name,
-					version,
-					text
-				})
+		try{
+			if(this.#options.target != "node"){
+				process.env.KW_USER_AGENT= "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
 			}
-			let externalModules = []
-			if(this.#options.excludeNpmModules){
-				externalModules = mnames
-				mnames = []
+			else{
+				delete process.env.KW_USER_AGENT
 			}
-			else if(this.#options.npmExternalModules){
-				externalModules = mnames.filter((a)=> this.#options.npmExternalModules.indexOf(a.modname) >= 0)
-				mnames = mnames.filter((a)=> this.#options.npmExternalModules.indexOf(a.modname) < 0)
+			let info = await kawix.importInfo(file)
+			if(this.#options.target != "node"){
+				let bufferInfo = await kawix.importInfo(Builder.nodeTranslations.buffer)
+				await addInfo(bufferInfo)
 			}
-			
-			if(externalModules.length){
-				console.info(this.#options.npmEnv)
-				let info = await kawix.importInfo(kawix.packageLoader)
-				console.info("> Using loader:", kawix.packageLoader)
-				await addInfo(info)
+			await addInfo(info)
 
-				let mcode = []
-				mcode.push("exports.kawixPreload = async function(){")
-				let code = `
-				
-				var loader = $$KModule.require(${JSON.stringify(info.request)})
+			if(npmModules.size > 0){
+				let reg = new Registry()
+				let mnames = []
+				for(let name of npmModules){
+					
+					let uri = new URL("npm://" + name)
+					let text = name 
 
-				var reg = new loader.Registry()
-				reg.env = ${JSON.stringify(this.#options.npmEnv || {})}
-				var modReqs = ${JSON.stringify(externalModules)}
-				var modInfos = []				
-				if(modReqs.length == 1){
-					var modr= modReqs[0]
-					modInfos = [await reg.resolve(modr.name + "@" + modr.version)]
-				}else{
-					modInfos = await reg.resolveMany(modReqs)
-				}
+					let y = name.lastIndexOf("@")
+					let modname = ''
+					let version = 'latest'
+					if(y >= 0){
+						version = name.substring(y+1)
+						name = name.substring(0,y)
+						modname = name + "@" + version
+					}
 
-				var createGet = function(mod, modr){
-					Object.defineProperty($$NPMRequires, modr.name + "@" + modr.version, {
-						get: function(){
-							return $$NodeRequire(mod.main)
-						}
+					
+					mnames.push({
+						search: uri.search,
+						searchParams: uri.searchParams,
+						modname,
+						name,
+						version,
+						text
 					})
 				}
-				for(let i=0;i<modInfos.length;i++){
-					var mod = modInfos[i]
-					var modr = modReqs[i]
-					if(!$$NPMRequires){
-						$$NPMRequires = {}
-					}
-					createGet(mod, modr)					
+				let externalModules = []
+				if(this.#options.excludeNpmModules){
+					externalModules = mnames
+					mnames = []
 				}
-
-				if(typeof exports.kawixPreload.loader == "function"){
-					await exports.kawixPreload.loader()
+				else if(this.#options.npmExternalModules){
+					externalModules = mnames.filter((a)=> this.#options.npmExternalModules.indexOf(a.modname) >= 0)
+					mnames = mnames.filter((a)=> this.#options.npmExternalModules.indexOf(a.modname) < 0)
 				}
-				`
-				mcode.push(code)
-				mcode.push("}")
-				preloadCode = mcode
-			}
-			if(mnames.length){
-				let mcode = []
-				let modInfos = await reg.resolveMany(mnames)
-				let mfolder = Path.dirname(Path.dirname(modInfos[0].folder))
-				let mfile = Path.join(mfolder, "$main.ts")
-				let mfile2 = Path.join(mfolder, "$compiled.ts")
-				//mcode.push("class NPMModules{")
-				for(let mod of mnames){
-					/*
-					mcode.push(`\tstatic get ["${mod.name}@${mod.version}"](){`)
-					mcode.push(`\t\treturn re${"q"}uire("${mod.name}")`)
-					mcode.push("}")
-					*/
+				kwbModules = [...kwbModulesSet]
 
-					mcode.push(`Object.defineProperty($$NPMRequires, "${mod.name}@${mod.version}", {
-						get(){
-							return re${"q"}uire("${mod.name}")
+
+				if(externalModules.length || kwbModules.length){
+					//console.info(this.#options.npmEnv)
+					let info = await kawix.importInfo(kawix.packageLoader)
+					console.info("> Using loader:", kawix.packageLoader)
+					await addInfo(info)
+
+					let mcode = []
+					mcode.push("exports.kawixPreload = async function(){")
+					let code = `
+					
+					var loader = $$KModule.require(${JSON.stringify(info.request)})
+
+					var reg = new loader.Registry()
+					reg.env = ${JSON.stringify(this.#options.npmEnv || {})}
+					var modReqs = ${JSON.stringify(externalModules)}
+					var kwbReqs = ${JSON.stringify(kwbModules)}
+					var modInfos = []				
+
+					if(modReqs.length){
+						if(modReqs.length == 1){
+							var modr= modReqs[0]
+							modInfos = [await reg.resolve(modr.name + "@" + modr.version)]
+						}else{
+							modInfos = await reg.resolveMany(modReqs)
 						}
-					})`)
-				}
+					}
 
-				
-				if(nodeFiles.size){
-					for(let file of nodeFiles){
-						mcode.push(`Object.defineProperty($$NPMRequires, ${JSON.stringify(file)}, {
+					var createGet = function(mod, modr){
+						Object.defineProperty($$NPMRequires, modr.url || (modr.name + "@" + modr.version), {
+							get: function(){
+								return $$NodeRequire(mod.main)
+							}
+						})
+					}
+					for(let i=0;i<modInfos.length;i++){
+						var mod = modInfos[i]
+						var modr = modReqs[i]
+						if(!$$NPMRequires){
+							$$NPMRequires = {}
+						}
+						createGet(mod, modr)				
+					}
+
+					if(kwbReqs.length){
+						for(let i=0;i<kwbReqs.length;i++){
+							let url = kwbReqs[i]
+							let name = url 
+							if(url.startsWith("./")){
+								url = __dirname + url.substring(1)
+							}
+							$$NPMRequires[name] = await global.kawix.import(url)
+						}
+						
+					}
+
+					if(typeof exports.kawixPreload.loader == "function"){
+						await exports.kawixPreload.loader()
+					}
+					`
+					mcode.push(code)
+					mcode.push("}")
+					preloadCode = mcode
+					
+				}
+				if(mnames.length){
+					let mcode = []
+					let modInfos = await reg.resolveMany(mnames)
+					let mfolder = Path.dirname(Path.dirname(modInfos[0].folder))
+					let mfile = Path.join(mfolder, "$main.ts")
+					let mfile2 = Path.join(mfolder, "$compiled.ts")
+					//mcode.push("class NPMModules{")
+					for(let mod of mnames){
+						/*
+						mcode.push(`\tstatic get ["${mod.name}@${mod.version}"](){`)
+						mcode.push(`\t\treturn re${"q"}uire("${mod.name}")`)
+						mcode.push("}")
+						*/
+
+						mcode.push(`Object.defineProperty($$NPMRequires, "${mod.name}@${mod.version}", {
 							get(){
-								return re${"q"}uire(${JSON.stringify(file)})
+								return re${"q"}uire("${mod.name}")
 							}
 						})`)
 					}
+
+					
+					if(nodeFiles.size){
+						for(let file of nodeFiles){
+							mcode.push(`Object.defineProperty($$NPMRequires, ${JSON.stringify(file)}, {
+								get(){
+									return re${"q"}uire(${JSON.stringify(file)})
+								}
+							})`)
+						}
+					}
+
+					//mcode.push("}; console.info('here-->'); $$modParams.exports.default = NPMModules")
+					await fs.promises.writeFile(mfile,mcode.join("\n"))
+					
+
+					if(this.#options.target == "node"){
+						await esbuild.build(Object.assign({
+							entryPoints: [mfile],
+							bundle: true,
+							platform: 'node',
+							target: "node" + process.version.substring(1).split(".")[0],
+							logLevel: 'error',
+							outfile: mfile2
+						}, this.#options.esbuild || {}))
+					}
+					else{
+						await esbuild.build(Object.assign({
+							entryPoints: [mfile],
+							bundle: true,
+							target: this.#options.target,
+							logLevel: 'error',
+							outfile: mfile2
+						}, this.#options.esbuild || {}))
+					}
+
+					let content = await fs.promises.readFile(mfile2, 'utf8')
+					content = "\n//KWRUNTIME-DISABLE-TRANSPILATION\n" + content
+					await fs.promises.writeFile(mfile2, content)
+
+					let info = await kawix.importInfo(mfile2)
+					await addInfo(info)
+					npmFile = mfile2
 				}
 
-				//mcode.push("}; console.info('here-->'); $$modParams.exports.default = NPMModules")
-				await fs.promises.writeFile(mfile,mcode.join("\n"))
 				
-
-				if(this.#options.target == "node"){
-					await esbuild.build(Object.assign({
-						entryPoints: [mfile],
-						bundle: true,
-						platform: 'node',
-						target: "node" + process.version.substring(1).split(".")[0],
-						logLevel: 'error',
-						outfile: mfile2
-					}, this.#options.esbuild || {}))
-				}
-				else{
-					await esbuild.build(Object.assign({
-						entryPoints: [mfile],
-						bundle: true,
-						target: this.#options.target,
-						logLevel: 'error',
-						outfile: mfile2
-					}, this.#options.esbuild || {}))
-				}
-
-				let content = await fs.promises.readFile(mfile2, 'utf8')
-				content = "\n//KWRUNTIME-DISABLE-TRANSPILATION\n" + content
-				await fs.promises.writeFile(mfile2, content)
-
-				let info = await kawix.importInfo(mfile2)
-				await addInfo(info)
-				npmFile = mfile2
 			}
 
+			//console.info("NPM Modules:", [...npmModules])
+
+
+			let str = this.#code
+			str.push("function _defineProperty(obj, key, value) { if (key in obj) { Object.defineProperty(obj, key, { value: value, enumerable: true, configurable: true, writable: true }); } else { obj[key] = value; } return obj; }")
+			str.push($$$createKModule.toString())
+			str.push("var $$module = null")
+			str.push("try{ $$module = module } catch(e){}")
+			str.push(`var $$KModule =  $$$createKModule($$filename, ${JSON.stringify(Object.keys(KModule.extensions))}).addFiles($$Files)`)
+			if(this.#options.target != "node"){
+				str.push(`if(!$$KModule.global.Buffer) $$KModule.global.Buffer = $$KModule.re${"q"}uire('${nodeTranslations.buffer}').Buffer`)
+			}
+			if(npmFile){
+				str.push(`$$NPMRequires = {}; $$KModule.re${"q"}uire("${npmFile}").default`)	
+			}
+			if(preloadCode.length){
+				preloadCode[preloadCode.length - 1] = `$$KModule.$re${"q"}uire([${JSON.stringify(info.request)}], $$module)`
+				preloadCode.push("}")
+				str.push(preloadCode.join("\n"))
+			}
+			else{
+				str.push(`$$KModule.$re${"q"}uire([${JSON.stringify(info.request)}], $$module)`)
+			}
 			
-		}
 
-		//console.info("NPM Modules:", [...npmModules])
-
-
-		let str = this.#code
-		str.push("function _defineProperty(obj, key, value) { if (key in obj) { Object.defineProperty(obj, key, { value: value, enumerable: true, configurable: true, writable: true }); } else { obj[key] = value; } return obj; }")
-		str.push($$$createKModule.toString())
-		str.push("var $$module = null")
-		str.push("try{ $$module = module } catch(e){}")
-		str.push(`var $$KModule =  $$$createKModule($$filename).addFiles($$Files)`)
-		if(this.#options.target != "node"){
-			str.push(`if(!$$KModule.global.Buffer) $$KModule.global.Buffer = $$KModule.re${"q"}uire('${nodeTranslations.buffer}').Buffer`)
+		}catch(e){
+			let ex = Exception.create(`Build failed '${file}': ${e.message}`).putCode(e.code || "BUILD_FAILED")
+			//ex.originalStack = e.stack 
+			ex.stack += "\nInner exception: " + e.stack
+			throw ex
 		}
-		if(npmFile){
-			str.push(`$$NPMRequires = {}; $$KModule.re${"q"}uire("${npmFile}").default`)	
-		}
-		if(preloadCode.length){
-			preloadCode[preloadCode.length - 1] = `$$KModule.$re${"q"}uire([${JSON.stringify(info.request)}], $$module)`
-			preloadCode.push("}")
-			str.push(preloadCode.join("\n"))
-		}
-		else{
-			str.push(`$$KModule.$re${"q"}uire([${JSON.stringify(info.request)}], $$module)`)
-		}
-		
-
 	}
 
 	async writeTo(stream: string | Writable){
