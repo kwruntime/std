@@ -24,7 +24,9 @@ export class Registry{
 
     env: {[key:string]: string} = {}
     pnpm = "https://unpkg.com/pnpm@${version}"
-    pnpmVersion = "latest"
+
+    // para evitar problemas con version
+    pnpmVersion = "7.x"
 
     constructor(){}
 
