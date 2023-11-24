@@ -114,6 +114,7 @@ export class Request extends AsyncEventEmitter{
 	#server: any 
 	#body: RequestBody	
 
+	search = ''
 	params: {[key:string]: any}
 	data: {[key:string]: any} = {}
 	urlInfo: RequestUrlInfo
@@ -126,6 +127,11 @@ export class Request extends AsyncEventEmitter{
 		this.$pushUrl(raw.url)
 		this.urlInfo = new RequestUrlInfo(this.#urls)
 		this.#server = server
+		
+		let i= raw.url.indexOf("?")
+		if(i>= 0)
+			this.search = raw.url.substring(i)
+
 		//this.urlInfo.current = raw.url
 	}
 
@@ -139,10 +145,9 @@ export class Request extends AsyncEventEmitter{
 
 	get query(){
 		if(!this.#query){
-			let url = this.#urls[0]
-			let i = url.indexOf("?")
-			if(i >= 0){
-				this.#query = qs.parse(url.substring(i+1))
+
+			if(this.search?.length > 1){
+				this.#query = qs.parse(this.search.substring(1))
 			}
 			else{
 				this.#query = {}
